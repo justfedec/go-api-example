@@ -1,6 +1,6 @@
 # Go API Example
 
-Simple REST API with Go's standard library. No frameworks, no dependencies.
+Simple Todo app with Go's standard library. No frameworks, no dependencies.
 
 ## Run
 
@@ -8,9 +8,15 @@ Simple REST API with Go's standard library. No frameworks, no dependencies.
 go run . --addr 0.0.0.0:8080
 ```
 
+Open http://localhost:8080 for the web UI.
+
 ## Endpoints
 
-- `GET /` - Index page
-- `GET /todos` - List todos
-- `POST /todos` - Create todo (`{"title": "..."}`)
-- `GET /health` - Health check
+| Method   | Path           | Description         |
+|----------|----------------|---------------------|
+| `GET`    | `/`            | Web UI              |
+| `GET`    | `/todos`       | List all todos      |
+| `POST`   | `/todos`       | Create a todo       |
+| `PATCH`  | `/todos/{id}`  | Toggle completed    |
+| `DELETE` | `/todos/{id}`  | Delete a todo       |
+| `GET`    | `/health`      | Health check        |
