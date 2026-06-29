@@ -4,79 +4,19 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 )
 
 //go:embed index.html
 var static embed.FS
-
-// --- Domain ---
-
-type Todo struct {
-	ID        int       `json:"id"`
-	Title     string    `json:"title"`
-	Completed bool      `json:"completed"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
-type TodoStore struct {
-	mu     sync.RWMutex
-	todos  []Todo
-	nextID int
-}
-
-func NewTodoStore() *TodoStore {
-	return &TodoStore{nextID: 1}
-}
-
-func (s *TodoStore) All() []Todo {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]Todo, len(s.todos))
-	copy(out, s.todos)
-	return out
-}
-
-func (s *TodoStore) Add(title string) Todo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t := Todo{ID: s.nextID, Title: title, CreatedAt: time.Now()}
-	s.nextID++
-	s.todos = append(s.todos, t)
-	return t
-}
-
-func (s *TodoStore) Toggle(id int) (Todo, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.todos {
-		if s.todos[i].ID == id {
-			s.todos[i].Completed = !s.todos[i].Completed
-			return s.todos[i], true
-		}
-	}
-	return Todo{}, false
-}
-
-func (s *TodoStore) Delete(id int) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.todos {
-		if s.todos[i].ID == id {
-			s.todos = append(s.todos[:i], s.todos[i+1:]...)
-			return true
-		}
-	}
-	return false
-}
 
 // --- HTTP ---
 
@@ -86,7 +26,7 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
-	store := NewTodoStore()
+	store := NewMemoryStore()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleIndex)
@@ -144,50 +84,67 @@ func handleIndex(w http.ResponseWriter, _ *http.Request) {
 	w.Write(data)
 }
 
-func listTodos(s *TodoStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, s.All())
+func listTodos(s Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		todos, err := s.All(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not list todos")
+			return
+		}
+		writeJSON(w, http.StatusOK, todos)
 	}
 }
 
-func createTodo(s *TodoStore) http.HandlerFunc {
+func createTodo(s Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Title string `json:"title"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.Title == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title is required"})
+			writeError(w, http.StatusBadRequest, "title is required")
 			return
 		}
-		writeJSON(w, http.StatusCreated, s.Add(input.Title))
+		todo, err := s.Add(r.Context(), input.Title)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not create todo")
+			return
+		}
+		writeJSON(w, http.StatusCreated, todo)
 	}
 }
 
-func toggleTodo(s *TodoStore) http.HandlerFunc {
+func toggleTodo(s Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(r.PathValue("id"))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+			writeError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		todo, ok := s.Toggle(id)
-		if !ok {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		todo, err := s.Toggle(r.Context(), id)
+		if errors.Is(err, ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not toggle todo")
 			return
 		}
 		writeJSON(w, http.StatusOK, todo)
 	}
 }
 
-func deleteTodo(s *TodoStore) http.HandlerFunc {
+func deleteTodo(s Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(r.PathValue("id"))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+			writeError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		if !s.Delete(id) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		if err := s.Delete(r.Context(), id); errors.Is(err, ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		} else if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not delete todo")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -204,4 +161,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }
