@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -13,12 +14,12 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed index.html
 var static embed.FS
-
-// --- HTTP ---
 
 func main() {
 	addr := flag.String("addr", "0.0.0.0:8080", "listen address")
@@ -26,7 +27,36 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
-	store := NewMemoryStore()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		slog.Error("DATABASE_URL is required — attach a Database to this VM (the platform injects it as DATABASE_URL)")
+		os.Exit(1)
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		slog.Error("open database failed", "err", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(10)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+
+	store := NewPostgresStore(db)
+
+	// The DB may still be warming on a fresh VM — retry the ping before failing.
+	if err := waitForDB(store, 30*time.Second); err != nil {
+		slog.Error("database unreachable", "err", err)
+		os.Exit(1)
+	}
+
+	migCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = store.Migrate(migCtx)
+	cancel()
+	if err != nil {
+		slog.Error("migrate failed", "err", err)
+		os.Exit(1)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleIndex)
@@ -34,7 +64,7 @@ func main() {
 	mux.HandleFunc("POST /todos", createTodo(store))
 	mux.HandleFunc("PATCH /todos/{id}", toggleTodo(store))
 	mux.HandleFunc("DELETE /todos/{id}", deleteTodo(store))
-	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /health", handleHealth(store))
 
 	srv := &http.Server{
 		Addr:         *addr,
@@ -48,7 +78,7 @@ func main() {
 	defer stop()
 
 	go func() {
-		slog.Info("server started", "addr", *addr)
+		slog.Info("server started", "addr", *addr, "store", "postgres")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("listen failed", "err", err)
 			os.Exit(1)
@@ -57,13 +87,42 @@ func main() {
 
 	<-ctx.Done()
 	slog.Info("shutting down...")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	shutdownCtx, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
 	slog.Info("server stopped")
+}
+
+// waitForDB pings until success or the deadline elapses.
+func waitForDB(store *PostgresStore, within time.Duration) error {
+	deadline := time.Now().Add(within)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err := store.Ping(ctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		slog.Warn("waiting for database...", "err", err)
+		time.Sleep(time.Second)
+	}
+	return lastErr
+}
+
+func handleHealth(s *PostgresStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := s.Ping(ctx); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "down", "store": "postgres"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "store": "postgres"})
+	}
 }
 
 // --- Middleware ---
@@ -149,10 +208,6 @@ func deleteTodo(s Store) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
-}
-
-func handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // --- Helpers ---
