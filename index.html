@@ -197,5 +197,13 @@ $('#filters').addEventListener('click', (e) => {
 
 load();
 </script>
+<div id="backend-badge" style="position:fixed;bottom:12px;right:12px;font:12px system-ui;padding:4px 8px;border-radius:6px;background:#0b3d2e;color:#7ee2b8">checking…</div>
+<script>
+  fetch('/health').then(function (r) { return r.json(); }).then(function (d) {
+    document.getElementById('backend-badge').textContent = '● ' + (d.store || 'unknown');
+  }).catch(function () {
+    document.getElementById('backend-badge').textContent = '● offline';
+  });
+</script>
 </body>
 </html>
