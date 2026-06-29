@@ -27,6 +27,11 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
+	// The platform injects env vars (e.g. an attached Database's DATABASE_URL)
+	// into /app/.env, not the process environment. Load it so os.Getenv sees
+	// them. No-op locally where the file is absent and you export DATABASE_URL.
+	loadEnvFile("/app/.env")
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		slog.Error("DATABASE_URL is required — attach a Database to this VM (the platform injects it as DATABASE_URL)")
