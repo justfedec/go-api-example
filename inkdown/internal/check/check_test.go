@@ -163,6 +163,7 @@ func TestCheckErrors(t *testing.T) {
 		{"push rvalue", `push(range(0, 1), 1)`, "must be a list variable"},
 		{"push wrong element", "var xs = [1]\npush(xs, \"a\")", "cannot push a string value into a [int]"},
 		{"push non list", "var n = 1\npush(n, 2)", "push() needs a list as its first argument"},
+		{"push target index with call", "func f() -> int { return 0 }\nvar g = [[1]]\npush(g[f()], 2)", "must not contain function calls"},
 		{"int of bool", `let n = int(true)`, "int() takes an int, float, or string, got bool"},
 		{"unused builtin result", "let xs = [1]\nlen(xs)", "result of len(...) is unused"},
 		{"non call statement", `1 + 2`, "only calls can be used as statements"},

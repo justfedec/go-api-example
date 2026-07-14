@@ -398,6 +398,41 @@ func (c *checker) returnStmt(sc *scope, s *ast.ReturnStmt) {
 	}
 }
 
+// pushTargetIndexHasCall reports whether any index expression along a push
+// target (xs[i][j]) contains a call.
+func pushTargetIndexHasCall(e ast.Expr) bool {
+	for {
+		idx, ok := e.(*ast.IndexExpr)
+		if !ok {
+			return false
+		}
+		if exprHasCall(idx.Index) {
+			return true
+		}
+		e = idx.X
+	}
+}
+
+func exprHasCall(e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.CallExpr:
+		return true
+	case *ast.UnaryExpr:
+		return exprHasCall(e.X)
+	case *ast.BinaryExpr:
+		return exprHasCall(e.X) || exprHasCall(e.Y)
+	case *ast.IndexExpr:
+		return exprHasCall(e.X) || exprHasCall(e.Index)
+	case *ast.ListLit:
+		for _, el := range e.Elems {
+			if exprHasCall(el) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // rootIdent unwraps xs[i][j]... to the base identifier, or nil.
 func rootIdent(e ast.Expr) *ast.Ident {
 	for {
@@ -571,6 +606,11 @@ func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 		root := rootIdent(target)
 		if root == nil {
 			c.errf(target.Pos(), "the first argument of push() must be a list variable (or an index into one)")
+		}
+		// The generated Go spells the target twice (xs = append(xs, v)), so
+		// indices with calls would run those calls twice.
+		if pushTargetIndexHasCall(target) {
+			c.errf(target.Pos(), "push() target indices must not contain function calls (they would be evaluated twice); store the index in a variable first")
 		}
 		sym := c.resolveVar(sc, root)
 		c.requireMutable(target.Pos(), sym, "modified by push()")
