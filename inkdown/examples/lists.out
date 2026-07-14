@@ -1,0 +1,7 @@
+== lists demo ==
+squares: [1 4 9 16 25]
+count: 5
+first: 1 last: 25
+total: 55
+average: 11
+csv: 1, 4, 9, 16, 25

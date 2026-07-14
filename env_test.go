@@ -19,6 +19,10 @@ func TestLoadEnvFile(t *testing.T) {
 	}
 
 	t.Setenv("PRESET", "preset-wins") // already set → must NOT be overridden
+	// Register DATABASE_URL for restoration on cleanup (loadEnvFile sets it
+	// via os.Setenv, which would otherwise leak into later tests), then unset
+	// it so loadEnvFile takes the value from the file.
+	t.Setenv("DATABASE_URL", "")
 	os.Unsetenv("DATABASE_URL")
 
 	loadEnvFile(path)
