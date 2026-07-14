@@ -9,16 +9,16 @@ import (
 
 func TestExtractSingleBlock(t *testing.T) {
 	md := strings.Join([]string{
-		"# Title",          // 1
-		"",                 // 2
-		"Some prose.",      // 3
-		"",                 // 4
-		"```inkdown",       // 5
-		`print("hi")`,      // 6
-		"let x = 1",        // 7
-		"```",              // 8
-		"",                 // 9
-		"More prose.",      // 10
+		"# Title",     // 1
+		"",            // 2
+		"Some prose.", // 3
+		"",            // 4
+		"```inkdown",  // 5
+		`print("hi")`, // 6
+		"let x = 1",   // 7
+		"```",         // 8
+		"",            // 9
+		"More prose.", // 10
 	}, "\n") + "\n"
 
 	p, err := Extract(md)
@@ -36,14 +36,14 @@ func TestExtractSingleBlock(t *testing.T) {
 
 func TestExtractTanglesBlocksInOrder(t *testing.T) {
 	md := strings.Join([]string{
-		"intro",       // 1
-		"```inkdown",  // 2
-		"let a = 1",   // 3
-		"```",         // 4
-		"middle",      // 5
-		"~~~inkdown",  // 6
-		"let b = 2",   // 7
-		"~~~",         // 8
+		"intro",      // 1
+		"```inkdown", // 2
+		"let a = 1",  // 3
+		"```",        // 4
+		"middle",     // 5
+		"~~~inkdown", // 6
+		"let b = 2",  // 7
+		"~~~",        // 8
 	}, "\n")
 
 	p, err := Extract(md)
@@ -60,21 +60,21 @@ func TestExtractTanglesBlocksInOrder(t *testing.T) {
 
 func TestExtractSkipsNonInkdownAndExampleBlocks(t *testing.T) {
 	md := strings.Join([]string{
-		"```go",               // ignored: other language
-		"package main",        //
-		"```",                 //
-		"```inkdown example",  // ignored: example
-		"print(1)",            //
-		"```",                 //
-		"```",                 // ignored: no info string
-		"plain",               //
-		"```",                 //
-		"```inkdown",          // compiled
-		"print(2)",            // 11
-		"```",                 //
-		"``` inkdown extra",   // compiled: leading space in info, extra word
-		"print(3)",            // 14
-		"```",                 //
+		"```go",              // ignored: other language
+		"package main",       //
+		"```",                //
+		"```inkdown example", // ignored: example
+		"print(1)",           //
+		"```",                //
+		"```",                // ignored: no info string
+		"plain",              //
+		"```",                //
+		"```inkdown",         // compiled
+		"print(2)",           // 11
+		"```",                //
+		"``` inkdown extra",  // compiled: leading space in info, extra word
+		"print(3)",           // 14
+		"```",                //
 	}, "\n")
 
 	p, err := Extract(md)

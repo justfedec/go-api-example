@@ -8,8 +8,8 @@ import "fmt"
 type Kind int
 
 const (
-	EOF Kind = iota
-	NEWLINE // statement terminator: '\n' or ';'
+	EOF     Kind = iota
+	NEWLINE      // statement terminator: '\n' or ';'
 
 	IDENT
 	INT    // integer literal
