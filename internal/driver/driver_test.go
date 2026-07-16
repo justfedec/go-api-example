@@ -22,7 +22,12 @@ func TestExamplesGolden(t *testing.T) {
 			t.Parallel()
 			want, err := os.ReadFile(strings.TrimSuffix(md, ".md") + ".out")
 			if err != nil {
-				t.Fatalf("every example needs a golden .out file: %v", err)
+				// Examples that need the network or a terminal ship without
+				// a golden file, but they must still compile.
+				if cerr := Check(md); cerr != nil {
+					t.Fatalf("Check: %v", cerr)
+				}
+				t.Skipf("no golden .out file; type-checked only")
 			}
 			var stdout, stderr bytes.Buffer
 			code, err := Run(md, Options{Stdout: &stdout, Stderr: &stderr})
