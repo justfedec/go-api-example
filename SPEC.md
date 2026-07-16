@@ -1,6 +1,12 @@
 # The Inkdown Language Specification
 
-Version 1 (v1)
+Version 2 (v2)
+
+v2 grows the language in exactly one place — namespaced builtin calls like
+`http.get(...)` (§4.3) — and everything else through predeclared names: three
+opaque handle types (§3.1) and a standard library of builtins for strings,
+process access, HTTP (server and client), JSON, and LLM calls (§7). Programs
+that avoided the new reserved names (§2.2) compile unchanged.
 
 Inkdown is a small, statically typed, literate programming language. An Inkdown
 program **is** a Markdown document: prose is documentation, and only fenced code
@@ -57,9 +63,22 @@ func return let var if else while for in
 break continue and or not true false
 ```
 
-Builtin names (`print`, `len`, `range`, `push`, `str`, `int`, `float`,
-`string`, `bool`) are ordinary identifiers that are predeclared; they cannot be
-redeclared.
+Builtin names are predeclared and **reserved**: they cannot be redeclared,
+shadowed, or assigned, and they cannot appear as values — a callable builtin
+may only be called, and a type name may only appear in type position. The
+reserved set is:
+
+- the core builtins `print`, `eprint`, `len`, `range`, `push`, `str`, `int`,
+  `float` and the type names `string`, `bool` (§7.1);
+- the string builtins `split`, `join`, `contains`, `starts_with`, `index_of`,
+  `substring`, `trim`, `lower`, `upper`, `replace` (§7.2);
+- the process builtins `is_int`, `is_float`, `env`, `exit`, `read_line`
+  (§7.3);
+- the namespace roots `http`, `json`, `llm` (§4.3);
+- the handle type names `server`, `request`, `response` (§3.1).
+
+A `.` may appear only inside a namespaced builtin call (§4.3) or a float
+literal.
 
 ### 2.3 Literals
 
@@ -90,14 +109,36 @@ An `else` may appear on the line after the closing `}` of the preceding block.
 | `string` | immutable UTF-8 byte string   | `string`      |
 | `bool`   | boolean                       | `bool`        |
 | `[T]`    | list with elements of type T  | `[]T`         |
+| `server`, `request`, `response` | opaque handles (§3.1) | runtime pointer types |
 
 Lists nest: `[[int]]` is a list of lists of integers.
+
+**Lists are references.** Declaring or assigning a list copies the reference,
+not the elements, so two bindings can alias the same list and mutations
+through one are visible through the other. `let` restricts what may be done
+*through that binding* (§5.1); it does not deep-freeze the list.
 
 There are **no implicit conversions**. Mixing `int` and `float` in one
 expression is a compile error; convert explicitly with `int(x)` and `float(x)`.
 
 Zero values (relevant only for globals, section 6.2): `0`, `0.0`, `""`,
-`false`, and the empty list.
+`false`, and the empty list. A handle-typed global read before its
+declaration executes holds an **uninitialized handle** (§3.1).
+
+### 3.1 Handle types
+
+`server`, `request`, and `response` are nominal, opaque handle types. Values
+of these types are produced only by builtins (`http.serve`, `http.next`,
+`http.get`, ...): there is no literal syntax, and no operator accepts them —
+`==`, ordering, arithmetic, indexing, and `for` iteration are all compile
+errors. `str()` rejects a handle operand; `print()` accepts one and renders
+it as `<server>`, `<request>`, or `<response>`.
+
+Handles may be used in type annotations, including inside lists (`[request]`
+is legal, and `print`/`str` of such a list renders the `<...>` forms). An
+**uninitialized handle** — a handle-typed global read before its declaration
+statement has executed — panics with a self-describing message the moment it
+is passed to any builtin; `print` renders it as `<nil>`.
 
 ## 4. Expressions
 
@@ -132,18 +173,31 @@ v1.
 ### 4.3 Calls
 
 `f(a, b, c)` calls the function or builtin named `f`. Functions are not
-values in v1: a function name may only appear in call position. A call to a
+values: a function name may only appear in call position. A call to a
 function without a return type has no value and may only be used as a
 statement.
+
+Stdlib builtins live in the namespaces `http`, `json`, and `llm` and are
+called with a dotted name: `http.get(url)`, `json.escape(s)`, `llm.ask(p)`.
+The dot exists **only in call position**: `http.get` without an argument
+list, a dot after anything but a plain identifier, and chained dots are all
+syntax errors. Namespace roots are reserved (§2.2) but user identifiers can
+never contain a dot, so dotted names cannot collide with user code.
 
 ### 4.4 List literals
 
 A non-empty list literal takes the type of its elements, which must all agree.
 The empty literal `[]` has no type of its own; it is only valid where a list
-type is known from context, i.e. in a declaration with a type annotation
-(`var xs: [int] = []`), in an assignment to a list variable, as an argument to
-a user function with a list parameter, or in a `return` from a function with a
-list return type.
+type is known from context:
+
+- in a declaration with a type annotation (`var xs: [int] = []`);
+- in an assignment to a list variable;
+- as an argument to a user function — or a builtin (§7) — with a list
+  parameter;
+- in a `return` from a function with a list return type;
+- as the second argument of `push` into a list of lists;
+- as a non-first element of a list literal whose earlier elements fixed the
+  type (`[[1], []]`).
 
 ## 5. Statements
 
@@ -157,9 +211,13 @@ var name: type = expr       # mutable variable, checked against annotation
 ```
 
 An initializer is always required. `let` bindings cannot be reassigned, and
-their contents cannot be mutated (`xs[i] = v` and `push(xs, v)` require a
-`var` at the root). Redeclaring a name in the same scope is an error; an inner
-block may shadow an outer name.
+they cannot be mutated **through that binding**: `xs[i] = v` and `push(xs, v)`
+require a `var` at the root. Because lists are references (§3), a `let` list
+is not deep-frozen — a `var` alias of the same list can still change the
+elements the `let` binding sees. Copy the list if isolation matters.
+
+Redeclaring a name in the same scope is an error; an inner block may shadow
+an outer name. Unlike Go, a local that is never read is **not** an error.
 
 ### 5.2 Assignment
 
@@ -207,14 +265,17 @@ immutable binding scoped to the body, typed as the element type. `break` and
 
 `return expr` in a function with a return type; bare `return` in a function
 without one. `return` is not allowed at the top level. A function with a
-return type must end in a *terminating statement*: either a `return`, or an
-`if`/`else` chain (with a final `else`) whose branches all terminate.
+return type must end in a *terminating statement*: a `return`, a call to
+`exit(...)` (§7.3), or an `if`/`else` chain (with a final `else`) whose
+branches all terminate. Nothing else counts — in particular, a trailing
+`while true { ... }` does **not** satisfy the rule even though the function
+can never fall through it; end such a function with an unreachable `return`.
 
 ### 5.6 Expression statements
 
 Only calls may stand alone as statements. Calls to value-returning **user**
 functions may discard the result; calls to value-returning **builtins**
-(`len`, `range`, `str`, `int`, `float`) may not.
+(`len`, `str`, `http.get`, `llm.ask`, ...) may not.
 
 ## 6. Program structure
 
@@ -239,31 +300,142 @@ A `let` or `var` declared directly at the top level is a **global**, visible
 inside every function. Top-level code cannot mention a global before the line
 that declares it. Because functions may run before a later global's
 declaration statement has executed, a global read at that point holds its zero
-value. Declarations inside a nested block (e.g. inside a top-level `if`) are
-locals, not globals.
+value (§3) — for handle types that is an uninitialized handle, which panics
+when passed to a builtin (§3.1). Declarations inside a nested block (e.g.
+inside a top-level `if`) are locals, not globals.
 
 Function names, global names, and builtin names share one namespace; duplicates
 are an error.
 
 ## 7. Builtins
 
+Failures split by intent throughout the library: **guards** (`is_int`,
+`json.has`, `http.ok`) let programs test before acting, the HTTP client
+reports failure through its response value, and everything else panics —
+panics are for programmer errors, not expected conditions.
+
+### 7.1 Core
+
 | Builtin           | Signature                          | Notes |
 | ----------------- | ---------------------------------- | ----- |
 | `print(a, b, …)`  | any types, any count → (no value)  | prints arguments separated by spaces, then a newline; lists print Go-style, e.g. `[1 2 3]` |
-| `len(x)`          | `string` or `[T]` → `int`          | for strings, length in bytes |
+| `eprint(a, b, …)` | any types, any count → (no value)  | like `print`, to standard error |
+| `len(x)`          | `string` or `[T]` → `int`          | for strings, length in **bytes** (string positions elsewhere count runes, §7.2) |
 | `range(a, b)`     | `int, int → [int]`                 | the integers `a, a+1, …, b-1`; empty when `b <= a` |
-| `push(xs, v)`     | `[T], T → (no value)`              | appends `v` to `xs`; `xs` must be an assignable list rooted in a `var` |
-| `str(x)`          | any type → `string`                | decimal for `int`; shortest form for `float`; `true`/`false` for `bool`; identity for `string` |
-| `int(x)`          | `int`, `float`, or `string` → `int`| truncates floats toward zero; panics if a string does not parse |
-| `float(x)`        | `int`, `float`, or `string` → `float` | panics if a string does not parse |
+| `push(xs, v)`     | `[T], T → (no value)`              | appends `v` to `xs`; `xs` must be an assignable list rooted in a `var`, and its index expressions may not contain calls (they would be evaluated twice) |
+| `str(x)`          | any non-handle type → `string`     | decimal for `int`; shortest form for `float`; `true`/`false` for `bool`; identity for `string`; lists render Go-style (`[1 2 3]`); handle operands are a compile error |
+| `int(x)`          | `int`, `float`, or `string` → `int`| truncates floats toward zero; panics if a string does not parse (guard with `is_int`) |
+| `float(x)`        | `int`, `float`, or `string` → `float` | panics if a string does not parse (guard with `is_float`) |
+
+### 7.2 Strings
+
+String **positions count runes** (characters), so `index_of` and `substring`
+compose safely on UTF-8 text; only `len` is byte-based.
+
+| Builtin                | Signature                        | Notes |
+| ---------------------- | -------------------------------- | ----- |
+| `split(s, sep)`        | `string, string → [string]`      | Go semantics: `split("", ",")` is `[""]` |
+| `join(xs, sep)`        | `[string], string → string`      | |
+| `contains(s, sub)`     | `string, string → bool`          | |
+| `starts_with(s, p)`    | `string, string → bool`          | |
+| `index_of(s, sub)`     | `string, string → int`           | rune index of the first occurrence, `-1` if absent |
+| `substring(s, i, j)`   | `string, int, int → string`      | runes `i` to `j-1`; panics when the range is invalid |
+| `trim(s)`              | `string → string`                | strips leading/trailing whitespace |
+| `lower(s)` / `upper(s)`| `string → string`                | |
+| `replace(s, old, new)` | `string, string, string → string`| replaces every occurrence |
+
+### 7.3 Process
+
+| Builtin        | Signature            | Notes |
+| -------------- | -------------------- | ----- |
+| `is_int(s)`    | `string → bool`      | true iff `int(s)` would succeed |
+| `is_float(s)`  | `string → bool`      | true iff `float(s)` would succeed |
+| `env(name)`    | `string → string`    | environment variable, `""` when unset |
+| `exit(code)`   | `int → (no value)`   | terminates with the given exit code; counts as a terminating statement (§5.5) |
+| `read_line()`  | `→ string`           | next stdin line without its terminator; `""` at end of input |
+
+### 7.4 HTTP server (`http.`)
+
+The server is **blocking and sequential**: `http.serve` starts listening,
+`http.next` blocks until a request arrives, and the program handles exactly
+one request at a time. Every request must be answered with `http.respond`
+(exactly once); an unanswered request leaves its client waiting forever.
+Concurrent requests queue. See §8 for runtime details.
+
+| Builtin                          | Signature                        | Notes |
+| -------------------------------- | -------------------------------- | ----- |
+| `http.serve(port)`               | `int → server`                   | panics if the port cannot be bound; the port is listening when it returns |
+| `http.next(srv)`                 | `server → request`               | blocks for the next request |
+| `http.method(req)`               | `request → string`               | `"GET"`, `"POST"`, ... |
+| `http.path(req)`                 | `request → string`               | URL path, e.g. `/todos/1` |
+| `http.body(req)`                 | `request → string`               | request body |
+| `http.header(req, name)`         | `request, string → string`       | `""` when absent |
+| `http.query(req, name)`          | `request, string → string`       | query parameter, `""` when absent |
+| `http.set_header(req, n, v)`     | `request, string, string → (no value)` | must precede `http.respond`; panics after it |
+| `http.respond(req, status, body)`| `request, int, string → (no value)` | answers and releases the request; panics if already answered |
+
+### 7.5 HTTP client (`http.`)
+
+The client **never panics**: a transport failure (unreachable host, bad URL)
+yields a response with `http.ok` false, status `0`, and the error message as
+its text. HTTP-level errors are ordinary responses — check `http.status`.
+
+| Builtin                          | Signature                            | Notes |
+| -------------------------------- | ------------------------------------ | ----- |
+| `http.get(url)`                  | `string → response`                  | |
+| `http.post(url, body)`           | `string, string → response`          | sends `Content-Type: application/json` |
+| `http.request(m, url, hs, body)` | `string, string, [string], string → response` | headers as `"Name: value"` strings |
+| `http.status(resp)`              | `response → int`                     | `0` on transport failure |
+| `http.text(resp)`                | `response → string`                  | response body (the error message on transport failure) |
+| `http.ok(resp)`                  | `response → bool`                    | true iff an HTTP response was received |
+
+### 7.6 JSON (`json.`)
+
+JSON stays a string; `json.get` walks it with a dot-separated path — object
+keys by name, array elements by index (`"todos.0.title"`; `""` is the root).
+
+| Builtin               | Signature                    | Notes |
+| --------------------- | ---------------------------- | ----- |
+| `json.get(doc, path)` | `string, string → string`    | scalars in string form (convert with `int()`/`float()`); objects/arrays as compact JSON, ready to walk again; panics when the path is missing — guard with `json.has` |
+| `json.has(doc, path)` | `string, string → bool`      | false for a missing path or an unparsable document |
+| `json.len(doc, path)` | `string, string → int`       | length of the array at path; panics otherwise |
+| `json.escape(s)`      | `string → string`            | `s` as a quoted JSON string literal, for building JSON by concatenation |
+
+### 7.7 LLM (`llm.`)
+
+| Builtin                  | Signature                      | Notes |
+| ------------------------ | ------------------------------ | ----- |
+| `llm.ask(prompt)`        | `string → string`              | asks Claude via the Anthropic Messages API and returns the reply text |
+| `llm.ask(prompt, system)`| `string, string → string`      | same, with a system prompt |
+
+`llm.ask` panics with a self-describing message when `ANTHROPIC_API_KEY` is
+unset, the API returns a non-200 status, or the model declines the request.
+Configuration comes from the environment: `ANTHROPIC_API_KEY` (required),
+`INKDOWN_LLM_MODEL` (default `claude-opus-4-8`), `INKDOWN_LLM_MAX_TOKENS`
+(default `16000`), and `ANTHROPIC_BASE_URL` (default
+`https://api.anthropic.com` — point it at a fake server for hermetic tests).
+Never write an API key into a program: Inkdown documents are meant to be
+published.
 
 ## 8. Run-time behavior
 
 Inkdown compiles to Go, so run-time failures are Go panics: index out of
-range, integer division by zero, and failed `int()`/`float()` string parses.
-The generated code carries `//line` directives, so panic stack traces point at
-the original `.md` lines. A panic terminates the program with a nonzero exit
-status.
+range, integer division by zero, failed `int()`/`float()` string parses, and
+the library panics of §7. The generated code carries `//line` directives, so
+panic stack traces point at the original `.md` lines. A panic terminates the
+program with exit status 2; `exit(n)` terminates with `n`.
+
+The compiled program depends only on the Go standard library — `http.` and
+`llm.` included — so builds are hermetic and binaries are self-contained.
+
+**Server model.** `http.serve` binds its port before returning and accepts
+connections in the background; incoming requests queue (the queue holds 64
+pending requests; further clients block on the network) until the program
+takes them with `http.next`. Handling is strictly sequential — there is no
+concurrency in the language — and a response is fully flushed to the client
+before `http.respond` returns, so a program may exit immediately after
+answering its last request without truncating it. A `while true` accept loop
+keeps the process alive; stop it from outside (Ctrl-C).
 
 ## 9. Grammar
 
@@ -290,6 +462,8 @@ whilestmt   = "while" expr block ;
 forstmt     = "for" IDENT "in" expr block ;
 exprstmt    = expr ;                     (* must be a call, see 5.6 *)
 
+qualname    = IDENT "." IDENT ;        (* namespaced builtins, call position only *)
+
 expr        = orexpr ;
 orexpr      = andexpr { "or" andexpr } ;
 andexpr     = notexpr { "and" notexpr } ;
@@ -298,16 +472,18 @@ cmpexpr     = addexpr { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) addexpr } ;
 addexpr     = mulexpr { ( "+" | "-" ) mulexpr } ;
 mulexpr     = unary { ( "*" | "/" | "%" ) unary } ;
 unary       = "-" unary | postfix ;
-postfix     = primary { "(" [ args ] ")" | "[" expr "]" } ;
+postfix     = primary { "(" [ args ] ")" | "[" expr "]" | "." IDENT } ;
 args        = expr { "," expr } [ "," ] ;
 primary     = INT | FLOAT | STRING | "true" | "false"
             | IDENT | listlit | "(" expr ")" ;
 listlit     = "[" [ args ] "]" ;
 ```
 
-(Only identifiers denoting functions may be called, and calls/indexing are the
-only postfix forms; the parser accepts the general shape and the checker
-enforces the rest.)
+(Only identifiers — plain or `qualname` — may be called, and a `. IDENT`
+postfix is accepted only on a plain identifier that is immediately called:
+`http.get(x)` is a call of the qualified name, while a dot anywhere else is a
+syntax error. Indexing composes freely; the checker enforces the remaining
+rules.)
 
 ## 10. Diagnostics
 
@@ -317,14 +493,18 @@ Compile-time errors are reported as:
 file.md:line:col: message
 ```
 
-where `line` is a line of the original Markdown document. The compiler stops
-at the first error.
+where `line` is a line of the original Markdown document (the CLI prefixes
+the whole diagnostic with `inkdown: `). The compiler stops at the first
+error.
 
 ## 11. Limitations and future directions
 
-Deliberately out of scope for v1: maps and structs, first-class functions and
-closures, string indexing/slicing, multi-file programs and imports, a standard
-library beyond the builtins, multiple-error reporting, and named code-block
+Deliberately out of scope for v2: maps and structs (JSON stays string-typed,
+§7.6), first-class functions and closures (the server model needs none,
+§7.4), string indexing/slicing syntax (`substring` covers it), multi-file
+programs and imports, concurrency (the server is sequential by design),
+recoverable-error bindings (`let x, err = f()` — today's split is guards +
+`http.ok` + panics), multiple-error reporting, and named code-block
 references (Knuth-style `<<chunk>>` macros). The design keeps the door open:
 all of these fit the existing pipeline (extract → lex → parse → check → emit
-Go).
+Go) and the builtin registry.
