@@ -498,6 +498,8 @@ func (g *gen) call(b *strings.Builder, e *ast.CallExpr, prec int) {
 	switch e.Fun.Name {
 	case "print":
 		args("fmt.Println(")
+	case "eprint":
+		args("_ink_eprint(")
 	case "len":
 		args("len(")
 	case "range":

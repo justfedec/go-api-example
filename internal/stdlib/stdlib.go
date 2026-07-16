@@ -57,7 +57,7 @@ var ManualChunks = map[string]string{}
 
 // Chunks holds the prelude fragments by key; ChunkOrder fixes emission order.
 var Chunks = map[string]*Chunk{}
-var ChunkOrder = []string{}
+var ChunkOrder = []string{"strings", "proc", "httpserver", "httpclient", "json", "llm"}
 
 func register(specs ...*Spec) {
 	for _, s := range specs {

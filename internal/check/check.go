@@ -104,7 +104,7 @@ func (s *scope) lookup(name string) *symbol {
 // values. The callable ones are dispatched by name in call(); "string" and
 // "bool" are reserved because they name types.
 var builtinNames = map[string]bool{
-	"print": true, "len": true, "range": true, "push": true,
+	"print": true, "eprint": true, "len": true, "range": true, "push": true,
 	"str": true, "int": true, "float": true, "string": true, "bool": true,
 }
 
@@ -479,6 +479,10 @@ func stmtTerminates(s ast.Stmt) bool {
 	switch s := s.(type) {
 	case *ast.ReturnStmt:
 		return true
+	case *ast.ExprStmt:
+		// exit() never returns, so it satisfies the return rule.
+		call, ok := s.X.(*ast.CallExpr)
+		return ok && call.Fun.Name == "exit"
 	case *ast.IfStmt:
 		if s.Else == nil || !blockTerminates(s.Then) {
 			return false
@@ -603,7 +607,7 @@ func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 	}
 
 	switch name {
-	case "print":
+	case "print", "eprint":
 		for _, a := range e.Args {
 			c.exprValue(sc, a, nil)
 		}
@@ -653,7 +657,10 @@ func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 
 	case "str":
 		argCount(1)
-		c.exprValue(sc, e.Args[0], nil)
+		t := c.exprValue(sc, e.Args[0], nil)
+		if _, isOpaque := t.(*types.Opaque); isOpaque {
+			c.errf(e.Args[0].Pos(), "str() cannot convert a %s handle to a string", t)
+		}
 		return types.String
 
 	case "int", "float":
