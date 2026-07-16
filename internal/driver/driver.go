@@ -5,6 +5,8 @@
 package driver
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/justfedec/inkdown/internal/check"
 	"github.com/justfedec/inkdown/internal/codegen"
@@ -22,8 +26,9 @@ import (
 
 // Options configures Build and Run.
 type Options struct {
-	Out    string // build: output binary path ("" derives it from the file name)
-	EmitGo string // if set, also write the generated Go source to this path
+	Out     string // build: output binary path ("" derives it from the file name)
+	EmitGo  string // if set, also write the generated Go source to this path
+	NoCache bool   // Run: skip the compiled-binary cache
 
 	// Standard streams for the executed program (Run only); nil means the
 	// process defaults.
@@ -83,9 +88,11 @@ func Build(file string, opts Options) error {
 }
 
 // Run compiles file and executes it, wiring the standard streams from opts.
-// It returns the program's exit code.
+// It returns the program's exit code. Unless caching is disabled, an
+// unchanged program (same generated Go, same Go toolchain) skips the ~2s
+// `go build` and executes a cached native binary directly.
 func Run(file string, opts Options) (int, error) {
-	bin, cleanup, err := compileToBinary(file, opts.EmitGo)
+	bin, cleanup, err := binaryFor(file, opts)
 	if err != nil {
 		return 1, err
 	}
@@ -103,6 +110,48 @@ func Run(file string, opts Options) (int, error) {
 		return 1, fmt.Errorf("running %s: %w", file, err)
 	}
 	return 0, nil
+}
+
+// binaryFor returns a runnable binary for file, using the cache when enabled.
+// A cache hit returns the cached path with a no-op cleanup; a miss compiles,
+// stores the binary in the cache, and returns it. When --emit-go is set (or
+// the cache directory is unusable), it falls back to a throwaway build.
+func binaryFor(file string, opts Options) (bin string, cleanup func(), err error) {
+	goSrc, err := CompileToGo(file)
+	if err != nil {
+		return "", nil, err
+	}
+	if opts.EmitGo != "" {
+		if werr := os.WriteFile(opts.EmitGo, goSrc, 0o644); werr != nil {
+			return "", nil, werr
+		}
+	}
+
+	dir := cacheDir()
+	if opts.NoCache || opts.EmitGo != "" || dir == "" {
+		return compileToBinaryFrom(goSrc, file)
+	}
+
+	entry := filepath.Join(dir, cacheKey(goSrc))
+	cachedBin := filepath.Join(entry, "program")
+	if _, statErr := os.Stat(cachedBin); statErr == nil {
+		now := time.Now()
+		os.Chtimes(cachedBin, now, now) // mark as recently used for pruning
+		return cachedBin, func() {}, nil
+	}
+
+	bin, cleanup, err = compileToBinaryFrom(goSrc, file)
+	if err != nil {
+		return "", nil, err
+	}
+	// Populate the cache atomically: copy into the entry dir, then rename
+	// within the same filesystem. Any failure just leaves the cache unfilled.
+	if err := storeInCache(entry, cachedBin, bin); err == nil {
+		cleanup()
+		pruneCache(dir)
+		return cachedBin, func() {}, nil
+	}
+	return bin, cleanup, nil
 }
 
 func orDefault[T comparable](v, def T) T {
@@ -125,7 +174,11 @@ func compileToBinary(file, emitGo string) (bin string, cleanup func(), err error
 			return "", nil, err
 		}
 	}
+	return compileToBinaryFrom(goSrc, file)
+}
 
+// compileToBinaryFrom builds already-generated Go in a temporary module.
+func compileToBinaryFrom(goSrc []byte, file string) (bin string, cleanup func(), err error) {
 	goTool, err := exec.LookPath("go")
 	if err != nil {
 		return "", nil, errors.New("the Go toolchain is required but 'go' was not found in PATH")
@@ -171,6 +224,10 @@ func moveFile(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil
 	}
+	return copyFile(src, dst)
+}
+
+func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -185,4 +242,109 @@ func moveFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// -------------------------------------------------------------- binary cache
+
+// cacheKey derives a cache directory name from the generated Go source and
+// the Go toolchain. Keying on the *generated Go* — not the .md bytes — means
+// any change to the compiler or stdlib self-invalidates the cache, and the
+// source name baked into the //line directives keeps same-content, different
+// -name programs apart.
+func cacheKey(goSrc []byte) string {
+	h := sha256.New()
+	h.Write(goSrc)
+	h.Write([]byte{0})
+	h.Write([]byte(goToolchainID()))
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+var (
+	toolchainOnce sync.Once
+	toolchainID   string
+)
+
+// goToolchainID returns the identity of the `go` in PATH (its version line),
+// cached once per process.
+func goToolchainID() string {
+	toolchainOnce.Do(func() {
+		goTool, err := exec.LookPath("go")
+		if err != nil {
+			toolchainID = "no-go"
+			return
+		}
+		out, err := exec.Command(goTool, "version").Output()
+		if err != nil {
+			toolchainID = goTool
+			return
+		}
+		toolchainID = strings.TrimSpace(string(out))
+	})
+	return toolchainID
+}
+
+// cacheDir resolves the binary cache root, honoring INKDOWN_CACHE_DIR and
+// falling back to the user cache directory. Returns "" when no writable
+// location exists, which disables caching (never an error).
+func cacheDir() string {
+	base := os.Getenv("INKDOWN_CACHE_DIR")
+	if base == "" {
+		ucd, err := os.UserCacheDir()
+		if err != nil {
+			return ""
+		}
+		base = filepath.Join(ucd, "inkdown")
+	}
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return ""
+	}
+	return base
+}
+
+// storeInCache moves the freshly built binary into its cache entry via a
+// same-directory temp file and an atomic rename.
+func storeInCache(entry, cachedBin, builtBin string) error {
+	if err := os.MkdirAll(entry, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(entry, "program.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	tmp.Close()
+	if err := copyFile(builtBin, tmpName); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o755); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, cachedBin); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// pruneCache best-effort removes entries whose binary hasn't been used in
+// over 30 days. Errors are ignored — pruning is housekeeping, not correctness.
+func pruneCache(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		bin := filepath.Join(dir, e.Name(), "program")
+		info, err := os.Stat(bin)
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		os.RemoveAll(filepath.Join(dir, e.Name()))
+	}
 }

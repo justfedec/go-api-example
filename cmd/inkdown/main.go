@@ -35,12 +35,13 @@ func run(args []string) int {
 	case "run":
 		fs := flag.NewFlagSet("run", flag.ExitOnError)
 		emitGo := fs.String("emit-go", "", "also write the generated Go source to this path")
+		noCache := fs.Bool("no-cache", false, "always recompile instead of using the cached binary")
 		fs.Parse(rest)
 		file, ok := oneFile(fs)
 		if !ok {
 			return 2
 		}
-		code, err := driver.Run(file, driver.Options{EmitGo: *emitGo})
+		code, err := driver.Run(file, driver.Options{EmitGo: *emitGo, NoCache: *noCache})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "inkdown:", err)
 			return 1

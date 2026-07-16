@@ -7,7 +7,115 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestMain points the binary cache at a throwaway directory so the suite
+// never reads or writes the developer's real cache.
+func TestMain(m *testing.M) {
+	tmp, err := os.MkdirTemp("", "inkdown-test-cache-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("INKDOWN_CACHE_DIR", tmp)
+	code := m.Run()
+	os.RemoveAll(tmp)
+	os.Exit(code)
+}
+
+func TestBuildCache(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("INKDOWN_CACHE_DIR", cacheRoot)
+
+	md := filepath.Join(t.TempDir(), "cacheme.md")
+	program := "# c\n\n```inkdown\nprint(6 * 7)\n```\n"
+	if err := os.WriteFile(md, []byte(program), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	countBinaries := func() int {
+		n := 0
+		entries, _ := os.ReadDir(cacheRoot)
+		for _, e := range entries {
+			if _, err := os.Stat(filepath.Join(cacheRoot, e.Name(), "program")); err == nil {
+				n++
+			}
+		}
+		return n
+	}
+
+	run := func() string {
+		var out bytes.Buffer
+		code, err := Run(md, Options{Stdout: &out})
+		if err != nil || code != 0 {
+			t.Fatalf("Run: %v code %d", err, code)
+		}
+		return out.String()
+	}
+
+	// First run compiles and populates the cache.
+	if got := run(); got != "42\n" {
+		t.Fatalf("first run = %q", got)
+	}
+	if n := countBinaries(); n != 1 {
+		t.Fatalf("after first run, cached binaries = %d, want 1", n)
+	}
+
+	// Second run of the same program hits the cache: still one entry, and
+	// the cached binary is not rebuilt (its build time is unchanged).
+	bin := filepath.Join(cacheRoot, mustOneEntry(t, cacheRoot), "program")
+	before, _ := os.Stat(bin)
+	buildTime := before.ModTime()
+	time.Sleep(10 * time.Millisecond)
+	if got := run(); got != "42\n" {
+		t.Fatalf("second run = %q", got)
+	}
+	if n := countBinaries(); n != 1 {
+		t.Fatalf("after cache hit, cached binaries = %d, want 1", n)
+	}
+	// A hit touches mtime forward (used-marker) but must not be older than
+	// the original build — i.e. it was not recompiled into a new slot.
+	after, _ := os.Stat(bin)
+	if after.ModTime().Before(buildTime) {
+		t.Errorf("cached binary went backwards in time; it was rebuilt")
+	}
+
+	// Editing the program changes the generated Go, so the key changes and a
+	// second entry appears.
+	if err := os.WriteFile(md, []byte("# c\n\n```inkdown\nprint(7 * 7)\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(); got != "49\n" {
+		t.Fatalf("edited run = %q", got)
+	}
+	if n := countBinaries(); n != 2 {
+		t.Fatalf("after edit, cached binaries = %d, want 2", n)
+	}
+
+	// --no-cache still runs but adds no new entry.
+	var out bytes.Buffer
+	if _, err := Run(md, Options{Stdout: &out, NoCache: true}); err != nil {
+		t.Fatal(err)
+	}
+	if n := countBinaries(); n != 2 {
+		t.Errorf("--no-cache changed the cache count to %d, want 2", n)
+	}
+}
+
+func mustOneEntry(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			return e.Name()
+		}
+	}
+	t.Fatal("no cache entry directory found")
+	return ""
+}
 
 // TestExamplesGolden compiles and runs every example program, comparing its
 // stdout against the sibling .out file.
