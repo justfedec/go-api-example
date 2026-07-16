@@ -114,8 +114,8 @@ func handle(req: request) {
     }
     return
   }
-  if starts_with(path, "/todos/") {
-    let parts = split(path, "/")
+  if str.starts_with(path, "/todos/") {
+    let parts = str.split(path, "/")
     if len(parts) == 3 and is_int(parts[2]) {
       let i = find(int(parts[2]))
       if i == -1 {

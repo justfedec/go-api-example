@@ -11,5 +11,7 @@ true true
 10 -1
 Quick
 The Quick Brown Yak
+4 café
 43
 true false
+int(): cannot parse "not a number" as an integer

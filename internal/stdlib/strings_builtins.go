@@ -3,26 +3,31 @@ package stdlib
 import "github.com/justfedec/inkdown/internal/types"
 
 func init() {
+	Roots["str"] = true
+
 	str := types.String
 	strList := &types.List{Elem: types.String}
 	register(
-		&Spec{Name: "split", Params: []types.Type{str, str}, Ret: strList, GoFunc: "_ink_split", Chunk: "strings"},
-		&Spec{Name: "join", Params: []types.Type{strList, str}, Ret: str, GoFunc: "_ink_join", Chunk: "strings"},
-		&Spec{Name: "contains", Params: []types.Type{str, str}, Ret: types.Bool, GoFunc: "_ink_contains", Chunk: "strings"},
-		&Spec{Name: "starts_with", Params: []types.Type{str, str}, Ret: types.Bool, GoFunc: "_ink_startsWith", Chunk: "strings"},
-		&Spec{Name: "index_of", Params: []types.Type{str, str}, Ret: types.Int, GoFunc: "_ink_indexOf", Chunk: "strings"},
-		&Spec{Name: "substring", Params: []types.Type{str, types.Int, types.Int}, Ret: str, GoFunc: "_ink_substring", Chunk: "strings"},
-		&Spec{Name: "trim", Params: []types.Type{str}, Ret: str, GoFunc: "_ink_trim", Chunk: "strings"},
-		&Spec{Name: "lower", Params: []types.Type{str}, Ret: str, GoFunc: "_ink_lower", Chunk: "strings"},
-		&Spec{Name: "upper", Params: []types.Type{str}, Ret: str, GoFunc: "_ink_upper", Chunk: "strings"},
-		&Spec{Name: "replace", Params: []types.Type{str, str, str}, Ret: str, GoFunc: "_ink_replace", Chunk: "strings"},
+		&Spec{Name: "str.len", Params: []types.Type{str}, Ret: types.Int, GoFunc: "_ink_strLen", Chunk: "strings"},
+		&Spec{Name: "str.slice", Params: []types.Type{str, types.Int, types.Int}, Ret: str, GoFunc: "_ink_slice", Chunk: "strings"},
+		&Spec{Name: "str.split", Params: []types.Type{str, str}, Ret: strList, GoFunc: "_ink_split", Chunk: "strings"},
+		&Spec{Name: "str.join", Params: []types.Type{strList, str}, Ret: str, GoFunc: "_ink_join", Chunk: "strings"},
+		&Spec{Name: "str.contains", Params: []types.Type{str, str}, Ret: types.Bool, GoFunc: "_ink_contains", Chunk: "strings"},
+		&Spec{Name: "str.starts_with", Params: []types.Type{str, str}, Ret: types.Bool, GoFunc: "_ink_startsWith", Chunk: "strings"},
+		&Spec{Name: "str.index_of", Params: []types.Type{str, str}, Ret: types.Int, GoFunc: "_ink_indexOf", Chunk: "strings"},
+		&Spec{Name: "str.trim", Params: []types.Type{str}, Ret: str, GoFunc: "_ink_trim", Chunk: "strings"},
+		&Spec{Name: "str.lower", Params: []types.Type{str}, Ret: str, GoFunc: "_ink_lower", Chunk: "strings"},
+		&Spec{Name: "str.upper", Params: []types.Type{str}, Ret: str, GoFunc: "_ink_upper", Chunk: "strings"},
+		&Spec{Name: "str.replace", Params: []types.Type{str, str, str}, Ret: str, GoFunc: "_ink_replace", Chunk: "strings"},
 	)
 
-	// String positions (index_of, substring) count runes, not bytes, so the
-	// two compose safely on UTF-8 text; len() stays byte-based as documented.
+	// Every str.* position counts runes, not bytes, so str.len, str.slice and
+	// str.index_of compose safely on UTF-8 text (len() is list-only in v3).
 	Chunks["strings"] = &Chunk{
 		Imports: []string{"strings", "unicode/utf8"},
-		Src: `func _ink_split(s, sep string) []string { return strings.Split(s, sep) }
+		Src: `func _ink_strLen(s string) int { return utf8.RuneCountInString(s) }
+
+func _ink_split(s, sep string) []string { return strings.Split(s, sep) }
 
 func _ink_join(xs []string, sep string) string { return strings.Join(xs, sep) }
 
@@ -38,10 +43,10 @@ func _ink_indexOf(s, sub string) int {
 	return utf8.RuneCountInString(s[:i])
 }
 
-func _ink_substring(s string, i, j int) string {
+func _ink_slice(s string, i, j int) string {
 	runes := []rune(s)
 	if i < 0 || j > len(runes) || i > j {
-		panic("substring(): invalid range [" + strconv.Itoa(i) + ":" + strconv.Itoa(j) + ") for a string of " + strconv.Itoa(len(runes)) + " characters")
+		panic("str.slice: invalid range [" + strconv.Itoa(i) + ":" + strconv.Itoa(j) + ") for a string of " + strconv.Itoa(len(runes)) + " characters")
 	}
 	return string(runes[i:j])
 }

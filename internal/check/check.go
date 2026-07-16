@@ -635,14 +635,16 @@ func (c *checker) exprInner(sc *scope, e ast.Expr, expected types.Type) types.Ty
 			if c.records[e.Name] != nil {
 				c.errf(e.Pos(), "'%s' is a record type; construct a value with %s(field: ...)", e.Name, e.Name)
 			}
+			// A callable builtin takes precedence over the namespace message
+			// (str is both a conversion builtin and the string namespace).
+			if builtinNames[e.Name] {
+				c.errf(e.Pos(), "builtin '%s' can only be called", e.Name)
+			}
 			if stdlib.Roots[e.Name] {
 				c.errf(e.Pos(), "'%s' is a namespace; its functions are called like %s.name(...)", e.Name, e.Name)
 			}
 			if stdlib.Types[e.Name] != nil {
 				c.errf(e.Pos(), "'%s' is a type, not a value", e.Name)
-			}
-			if builtinNames[e.Name] {
-				c.errf(e.Pos(), "builtin '%s' can only be called", e.Name)
 			}
 			c.errf(e.Pos(), "'%s' is not defined", e.Name)
 		}
@@ -746,8 +748,11 @@ func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 	case "len":
 		argCount(1)
 		t := c.exprValue(sc, e.Args[0], nil)
-		if _, isList := t.(*types.List); !isList && !t.Equal(types.String) {
-			c.errf(e.Args[0].Pos(), "len() needs a string or a list, got %s", t)
+		if t.Equal(types.String) {
+			c.errf(e.Args[0].Pos(), "len() counts list elements; use str.len(s) for a string's length in characters")
+		}
+		if _, isList := t.(*types.List); !isList {
+			c.errf(e.Args[0].Pos(), "len() needs a list, got %s", t)
 		}
 		return types.Int
 

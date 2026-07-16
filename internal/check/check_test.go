@@ -52,7 +52,7 @@ push(xs, 2)
 xs[0] = 10
 xs[1] += 5
 let grid = [[1, 2], [3, 4]]
-print(xs[0], grid[1][0], len(xs), len("abc"))
+print(xs[0], grid[1][0], len(xs), str.len("abc"))
 `},
 		{"shadowing in nested blocks", `
 let x = 1
@@ -196,8 +196,11 @@ func TestCheckErrors(t *testing.T) {
 		{"function as value", "func f() {}\nlet g = f", "function 'f' can only be called"},
 		{"builtin as value", `let g = str`, "builtin 'str' can only be called"},
 		{"string as function", `let s = string(5)`, "'string' is a type, not a function (use str(x)"},
-		{"len arity", `let n = len("a", "b")`, "len() takes 1 argument, got 2"},
-		{"len of int", `let n = len(5)`, "len() needs a string or a list"},
+		{"len arity", `let n = len([1], [2])`, "len() takes 1 argument, got 2"},
+		{"len of int", `let n = len(5)`, "len() needs a list"},
+		{"len of string", `let n = len("abc")`, "use str.len(s)"},
+		{"str namespace member as value", `let x = str.split`, "'str.split' can only be called"},
+		{"unknown str function", `let x = str.reverse("a")`, "'str' has no function 'reverse'"},
 		{"range bounds", `for i in range(0, "x") { print(i) }`, "range() bounds must be int"},
 		{"push rvalue", `push(range(0, 1), 1)`, "must be a list variable"},
 		{"push wrong element", "var xs = [1]\npush(xs, \"a\")", "cannot push a string value into a [int]"},
