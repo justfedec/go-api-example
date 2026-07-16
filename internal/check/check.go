@@ -27,7 +27,20 @@ func Check(prog *ast.Program) (err error) {
 		}
 	}()
 
-	c := &checker{global: newScope(nil)}
+	c := &checker{global: newScope(nil), records: map[string]*types.Record{}}
+
+	// Pass 0: record declarations — names first, so records can reference
+	// each other (and themselves) in field types and function signatures.
+	for _, s := range prog.Stmts {
+		if rec, ok := s.(*ast.RecordDecl); ok {
+			c.declareRecord(rec)
+		}
+	}
+	for _, s := range prog.Stmts {
+		if rec, ok := s.(*ast.RecordDecl); ok {
+			c.resolveRecordFields(rec)
+		}
+	}
 
 	// Pass 1: function signatures, so calls work regardless of order.
 	for _, s := range prog.Stmts {
@@ -38,7 +51,8 @@ func Check(prog *ast.Program) (err error) {
 
 	// Pass 2: top-level statements, in the order they will execute.
 	for _, s := range prog.Stmts {
-		if _, ok := s.(*ast.FuncDecl); ok {
+		switch s.(type) {
+		case *ast.FuncDecl, *ast.RecordDecl:
 			continue
 		}
 		c.stmt(c.global, s)
@@ -127,11 +141,39 @@ func (c *checker) declare(sc *scope, pos token.Pos, sym *symbol) {
 	if builtinNames[sym.name] {
 		c.errf(pos, "cannot redeclare builtin '%s'", sym.name)
 	}
+	if c.records[sym.name] != nil {
+		c.errf(pos, "cannot redeclare record type '%s'", sym.name)
+	}
 	if _, exists := sc.syms[sym.name]; exists {
 		c.errf(pos, "'%s' is already declared in this scope", sym.name)
 	}
 	sc.syms[sym.name] = sym
 	sc.order = append(sc.order, sym)
+}
+
+func (c *checker) declareRecord(rec *ast.RecordDecl) {
+	if builtinNames[rec.Name] {
+		c.errf(rec.NamePos, "cannot redeclare builtin '%s'", rec.Name)
+	}
+	if _, exists := c.records[rec.Name]; exists {
+		c.errf(rec.NamePos, "record '%s' is already declared", rec.Name)
+	}
+	c.records[rec.Name] = &types.Record{Name: rec.Name}
+}
+
+func (c *checker) resolveRecordFields(rec *ast.RecordDecl) {
+	r := c.records[rec.Name]
+	seen := map[string]bool{}
+	for _, f := range rec.Fields {
+		if f.Name == "String" {
+			c.errf(f.NamePos, "record fields cannot be named 'String' (it collides with the generated rendering method)")
+		}
+		if seen[f.Name] {
+			c.errf(f.NamePos, "record '%s' already has a field '%s'", rec.Name, f.Name)
+		}
+		seen[f.Name] = true
+		r.Fields = append(r.Fields, types.RecordField{Name: f.Name, Type: c.resolveType(f.Type)})
+	}
 }
 
 // closeScope marks declarations whose local was never read, so the code
@@ -154,7 +196,8 @@ func closeScope(sc *scope) {
 
 type checker struct {
 	global    *scope
-	fn        *ast.FuncDecl // current function, nil at the top level
+	records   map[string]*types.Record // record types, by name
+	fn        *ast.FuncDecl            // current function, nil at the top level
 	fnSig     *sig
 	loopDepth int
 }
@@ -209,6 +252,9 @@ func (c *checker) resolveType(t ast.TypeExpr) types.Type {
 			return types.Bool
 		case "str":
 			c.errf(t.Pos(), "unknown type 'str' (the type is called 'string')")
+		}
+		if rec, ok := c.records[t.Name]; ok {
+			return rec
 		}
 		if opaque, ok := stdlib.Types[t.Name]; ok {
 			return opaque
@@ -278,11 +324,11 @@ func (c *checker) stmt(sc *scope, s ast.Stmt) {
 		}
 		t := c.expr(sc, call, nil)
 		// User functions may have their result discarded (as in Go);
-		// value-only builtins may not.
-		if t != nil && builtinNames[call.Fun.Name] {
+		// value-only builtins and record constructors may not.
+		if t != nil && (builtinNames[call.Fun.Name] || c.records[call.Fun.Name] != nil) {
 			c.errf(call.Pos(), "result of %s(...) is unused", call.Fun.Name)
 		}
-	case *ast.FuncDecl:
+	case *ast.FuncDecl, *ast.RecordDecl:
 		// Handled by Check's passes; the parser only allows them at the top level.
 	default:
 		panic(fmt.Sprintf("unhandled statement %T", s))
@@ -341,7 +387,7 @@ func (c *checker) assignStmt(sc *scope, s *ast.AssignStmt) {
 		}
 		targetT = sym.typ
 		target.SetType(sym.typ)
-	case *ast.IndexExpr:
+	case *ast.IndexExpr, *ast.SelectorExpr:
 		root := rootIdent(target)
 		if root == nil {
 			c.errf(target.Pos(), "invalid assignment target")
@@ -378,6 +424,9 @@ func (c *checker) resolveVar(sc *scope, id *ast.Ident) *symbol {
 	if sym == nil {
 		if builtinNames[id.Name] {
 			c.errf(id.Pos(), "cannot assign to builtin '%s'", id.Name)
+		}
+		if c.records[id.Name] != nil {
+			c.errf(id.Pos(), "'%s' is a record type; construct a value with %s(field: ...)", id.Name, id.Name)
 		}
 		c.errf(id.Pos(), "'%s' is not defined", id.Name)
 	}
@@ -419,17 +468,20 @@ func (c *checker) returnStmt(sc *scope, s *ast.ReturnStmt) {
 }
 
 // pushTargetIndexHasCall reports whether any index expression along a push
-// target (xs[i][j]) contains a call.
+// target (xs[i][j], t.rows[i]) contains a call.
 func pushTargetIndexHasCall(e ast.Expr) bool {
 	for {
-		idx, ok := e.(*ast.IndexExpr)
-		if !ok {
+		switch x := e.(type) {
+		case *ast.IndexExpr:
+			if exprHasCall(x.Index) {
+				return true
+			}
+			e = x.X
+		case *ast.SelectorExpr:
+			e = x.X
+		default:
 			return false
 		}
-		if exprHasCall(idx.Index) {
-			return true
-		}
-		e = idx.X
 	}
 }
 
@@ -443,6 +495,8 @@ func exprHasCall(e ast.Expr) bool {
 		return exprHasCall(e.X) || exprHasCall(e.Y)
 	case *ast.IndexExpr:
 		return exprHasCall(e.X) || exprHasCall(e.Index)
+	case *ast.SelectorExpr:
+		return exprHasCall(e.X)
 	case *ast.ListLit:
 		for _, el := range e.Elems {
 			if exprHasCall(el) {
@@ -460,6 +514,8 @@ func rootIdent(e ast.Expr) *ast.Ident {
 		case *ast.Ident:
 			return x
 		case *ast.IndexExpr:
+			e = x.X
+		case *ast.SelectorExpr:
 			e = x.X
 		default:
 			return nil
@@ -532,6 +588,9 @@ func (c *checker) exprInner(sc *scope, e ast.Expr, expected types.Type) types.Ty
 	case *ast.Ident:
 		sym := sc.lookup(e.Name)
 		if sym == nil {
+			if c.records[e.Name] != nil {
+				c.errf(e.Pos(), "'%s' is a record type; construct a value with %s(field: ...)", e.Name, e.Name)
+			}
 			if stdlib.Roots[e.Name] {
 				c.errf(e.Pos(), "'%s' is a namespace; its functions are called like %s.name(...)", e.Name, e.Name)
 			}
@@ -554,6 +613,26 @@ func (c *checker) exprInner(sc *scope, e ast.Expr, expected types.Type) types.Ty
 
 	case *ast.CallExpr:
 		return c.call(sc, e, expected)
+
+	case *ast.SelectorExpr:
+		// A namespace member without a call gets a clearer message than the
+		// generic evaluation of its base would produce.
+		if id, ok := e.X.(*ast.Ident); ok && stdlib.Roots[id.Name] && sc.lookup(id.Name) == nil {
+			c.errf(e.Pos(), "'%s.%s' can only be called", id.Name, e.Name)
+		}
+		xt := c.exprValue(sc, e.X, nil)
+		rec, ok := xt.(*types.Record)
+		if !ok {
+			if _, isOpaque := xt.(*types.Opaque); isOpaque {
+				c.errf(e.NamePos, "%s values have no fields (use the accessor builtins like http.status)", xt)
+			}
+			c.errf(e.NamePos, "values of type %s have no fields", xt)
+		}
+		ft := rec.FieldType(e.Name)
+		if ft == nil {
+			c.errf(e.NamePos, "record '%s' has no field '%s'", rec.Name, e.Name)
+		}
+		return ft
 
 	case *ast.IndexExpr:
 		xt := c.exprValue(sc, e.X, nil)
@@ -595,6 +674,13 @@ func (c *checker) exprInner(sc *scope, e ast.Expr, expected types.Type) types.Ty
 
 func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 	name := e.Fun.Name
+
+	if rec, ok := c.records[name]; ok {
+		return c.constructorCall(sc, e, rec)
+	}
+	if len(e.ArgNames) > 0 {
+		c.errf(e.Pos(), "named arguments are only for record constructors")
+	}
 
 	argCount := func(n int) {
 		if len(e.Args) != n {
@@ -712,6 +798,11 @@ func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 		if stdlib.Roots[root] {
 			c.errf(e.Pos(), "'%s' has no function '%s'", root, member)
 		}
+		// A dotted call on something that resolves to a value or a record is
+		// the "records have no methods" mistake, not a bad namespace.
+		if sc.lookup(root) != nil || c.records[root] != nil {
+			c.errf(e.Pos(), "records have no methods, so '%s' has no function '%s' (read the field with %s.%s)", root, member, root, member)
+		}
 		c.errf(e.Pos(), "'%s' is not a namespace (dot-calls exist only for the builtin namespaces)", root)
 	}
 
@@ -734,6 +825,37 @@ func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 		}
 	}
 	return sym.sig.ret
+}
+
+// constructorCall checks Todo(id: 1, title: "x"): named arguments covering
+// exactly the record's field set, with each field's type flowing into its
+// argument as the expected type (so empty list literals check).
+func (c *checker) constructorCall(sc *scope, e *ast.CallExpr, rec *types.Record) types.Type {
+	if len(e.ArgNames) != len(e.Args) {
+		c.errf(e.Pos(), "the constructor %s(...) takes named arguments, like %s(%s: ...)", rec.Name, rec.Name, rec.Fields[0].Name)
+	}
+	seen := map[string]bool{}
+	for i, a := range e.Args {
+		fname := e.ArgNames[i]
+		ft := rec.FieldType(fname)
+		if ft == nil {
+			c.errf(a.Pos(), "record '%s' has no field '%s'", rec.Name, fname)
+		}
+		if seen[fname] {
+			c.errf(a.Pos(), "field '%s' is given twice", fname)
+		}
+		seen[fname] = true
+		got := c.exprValue(sc, a, ft)
+		if !got.Equal(ft) {
+			c.errf(a.Pos(), "field '%s' of '%s' is %s, got a %s value", fname, rec.Name, ft, got)
+		}
+	}
+	for _, f := range rec.Fields {
+		if !seen[f.Name] {
+			c.errf(e.Pos(), "constructor %s(...) is missing the field '%s'", rec.Name, f.Name)
+		}
+	}
+	return rec
 }
 
 func (c *checker) binaryType(pos token.Pos, op token.Kind, xt, yt types.Type) types.Type {

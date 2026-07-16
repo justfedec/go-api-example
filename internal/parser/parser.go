@@ -81,9 +81,12 @@ func (p *parser) parseProgram() *ast.Program {
 	p.skipNewlines()
 	for !p.at(token.EOF) {
 		var s ast.Stmt
-		if p.at(token.FUNC) {
+		switch {
+		case p.at(token.FUNC):
 			s = p.parseFuncDecl()
-		} else {
+		case p.at(token.RECORD):
+			s = p.parseRecordDecl()
+		default:
 			s = p.parseStatement(true)
 		}
 		prog.Stmts = append(prog.Stmts, s)
@@ -131,6 +134,42 @@ func (p *parser) parseFuncDecl() *ast.FuncDecl {
 	return fn
 }
 
+// parseRecordDecl parses `record Name { field: type ... }`. Fields are
+// separated by newlines and/or commas (braces do not suppress newlines).
+func (p *parser) parseRecordDecl() *ast.RecordDecl {
+	rec := &ast.RecordDecl{StmtBase: ast.StmtBase{P: p.cur().Pos}}
+	p.expect(token.RECORD)
+	name := p.expect(token.IDENT)
+	rec.Name, rec.NamePos = name.Lit, name.Pos
+
+	p.expect(token.LBRACE)
+	p.skipNewlines()
+	for !p.at(token.RBRACE) {
+		if p.at(token.EOF) {
+			p.fail("expected '}', found end of file")
+		}
+		fname := p.expect(token.IDENT)
+		p.expect(token.COLON)
+		ftype := p.parseType()
+		rec.Fields = append(rec.Fields, ast.Field{Name: fname.Lit, NamePos: fname.Pos, Type: ftype})
+		switch {
+		case p.at(token.COMMA):
+			p.advance()
+			p.skipNewlines()
+		case p.at(token.NEWLINE):
+			p.skipNewlines()
+		case p.at(token.RBRACE):
+		default:
+			p.fail("expected ',' or a newline after a record field, found %s", p.describeCur())
+		}
+	}
+	p.expect(token.RBRACE)
+	if len(rec.Fields) == 0 {
+		p.fail("record '%s' needs at least one field", rec.Name)
+	}
+	return rec
+}
+
 func (p *parser) parseBlock() *ast.Block {
 	blk := &ast.Block{StmtBase: ast.StmtBase{P: p.cur().Pos}}
 	p.expect(token.LBRACE)
@@ -168,6 +207,8 @@ func (p *parser) parseStatement(topLevel bool) ast.Stmt {
 		return &ast.ContinueStmt{StmtBase: ast.StmtBase{P: t.Pos}}
 	case token.FUNC:
 		p.fail("functions can only be declared at the top level")
+	case token.RECORD:
+		p.fail("records can only be declared at the top level")
 	case token.RBRACE:
 		p.fail("expected statement, found '}'")
 	}
@@ -182,7 +223,17 @@ func (p *parser) parseDecl() *ast.DeclStmt {
 	}
 	name := p.expect(token.IDENT)
 	d.Name, d.NamePos = name.Lit, name.Pos
+	if p.at(token.COMMA) {
+		// Two-name form: `let x, err = f(...)` (fallible builtins only —
+		// enforced by the checker).
+		p.advance()
+		errName := p.expect(token.IDENT)
+		d.ErrName, d.ErrPos = errName.Lit, errName.Pos
+	}
 	if p.at(token.COLON) {
+		if d.ErrName != "" {
+			p.fail("the two-name form '%s x, err = ...' does not take a type annotation", kw.Lit)
+		}
 		p.advance()
 		d.Ann = p.parseType()
 	}
@@ -256,9 +307,9 @@ func (p *parser) parseSimpleStatement() ast.Stmt {
 	x := p.parseExpr()
 	if op := p.cur(); assignOps[op.Kind] {
 		switch x.(type) {
-		case *ast.Ident, *ast.IndexExpr:
+		case *ast.Ident, *ast.IndexExpr, *ast.SelectorExpr:
 		default:
-			panic(token.Errorf(x.Pos(), "invalid assignment target (must be a variable or an index expression)"))
+			panic(token.Errorf(x.Pos(), "invalid assignment target (must be a variable, an index expression, or a record field)"))
 		}
 		p.advance()
 		return &ast.AssignStmt{
@@ -378,6 +429,18 @@ func (p *parser) parsePostfix() ast.Expr {
 			p.advance()
 			call := &ast.CallExpr{ExprBase: ast.At(fun.Pos()), Fun: fun}
 			for !p.at(token.RPAREN) {
+				// Named argument (record constructors): IDENT ':' expr.
+				// COLON cannot start or follow an expression, so one token
+				// of lookahead disambiguates without backtracking.
+				if p.at(token.IDENT) && p.toks[p.i+1].Kind == token.COLON {
+					if len(call.ArgNames) != len(call.Args) {
+						p.fail("cannot mix positional and named arguments")
+					}
+					call.ArgNames = append(call.ArgNames, p.advance().Lit)
+					p.advance() // ':'
+				} else if len(call.ArgNames) > 0 {
+					p.fail("cannot mix positional and named arguments")
+				}
 				call.Args = append(call.Args, p.parseExpr())
 				if !p.at(token.COMMA) {
 					break
@@ -392,19 +455,22 @@ func (p *parser) parsePostfix() ast.Expr {
 			p.expect(token.RBRACKET)
 			x = &ast.IndexExpr{ExprBase: ast.At(x.Pos()), X: x, Index: idx}
 		case token.DOT:
-			// Namespaced builtin call: fold IDENT '.' IDENT '(' into a single
-			// Ident named "http.get"; the LPAREN case of the next iteration
-			// builds the call. Dots exist only in call position.
-			base, ok := x.(*ast.Ident)
-			if !ok {
-				p.fail("'.' is only valid in namespaced calls like http.get(...)")
-			}
+			// Consume '.' and the member, then branch on '(' with no
+			// lookahead: an identifier base followed by '(' is a namespaced
+			// builtin call (fold into one dotted Ident — the LPAREN case of
+			// the next iteration builds the call); anything else followed by
+			// '(' would be a method call, which records do not have; and
+			// without '(' this is record field access.
 			p.advance()
 			member := p.expect(token.IDENT)
-			if !p.at(token.LPAREN) {
-				p.fail("expected '(' after '%s.%s' (namespaced names can only be called)", base.Name, member.Lit)
+			if base, ok := x.(*ast.Ident); ok && p.at(token.LPAREN) {
+				x = &ast.Ident{ExprBase: ast.At(base.Pos()), Name: base.Name + "." + member.Lit}
+				continue
 			}
-			x = &ast.Ident{ExprBase: ast.At(base.Pos()), Name: base.Name + "." + member.Lit}
+			if p.at(token.LPAREN) {
+				p.fail("records have no methods (only the builtin namespaces can be called with a dot)")
+			}
+			x = &ast.SelectorExpr{ExprBase: ast.At(x.Pos()), X: x, Name: member.Lit, NamePos: member.Pos}
 		default:
 			return x
 		}

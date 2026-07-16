@@ -24,7 +24,12 @@ import (
 // Markdown file name used in //line directives and mdLine translates
 // extracted line numbers to Markdown line numbers.
 func Generate(prog *ast.Program, srcName string, mdLine func(int) int) []byte {
-	g := &gen{srcName: srcName, mdLine: mdLine}
+	g := &gen{srcName: srcName, mdLine: mdLine, records: map[string]*ast.RecordDecl{}}
+	for _, s := range prog.Stmts {
+		if rec, ok := s.(*ast.RecordDecl); ok {
+			g.records[rec.Name] = rec
+		}
+	}
 	g.program(prog)
 	return []byte(g.out.String())
 }
@@ -34,6 +39,7 @@ type gen struct {
 	indent  int
 	srcName string
 	mdLine  func(int) int
+	records map[string]*ast.RecordDecl // by name, for goTypeExpr (syntax-only)
 }
 
 // ------------------------------------------------------------------- writing
@@ -94,6 +100,8 @@ func collectChunks(prog *ast.Program) map[string]bool {
 		case *ast.IndexExpr:
 			walkExpr(e.X)
 			walkExpr(e.Index)
+		case *ast.SelectorExpr:
+			walkExpr(e.X)
 		case *ast.ListLit:
 			for _, el := range e.Elems {
 				walkExpr(el)
@@ -146,6 +154,10 @@ func collectChunks(prog *ast.Program) map[string]bool {
 				walkType(s.Ret)
 			}
 			walkBlock(s.Body)
+		case *ast.RecordDecl:
+			for _, f := range s.Fields {
+				walkType(f.Type)
+			}
 		}
 	}
 	for _, s := range prog.Stmts {
@@ -228,6 +240,15 @@ func (g *gen) program(prog *ast.Program) {
 		}
 	}
 
+	// Record type declarations, each with a generated String() method so
+	// print() renders it.
+	for _, s := range prog.Stmts {
+		if rec, ok := s.(*ast.RecordDecl); ok {
+			g.line("")
+			g.recordDecl(rec)
+		}
+	}
+
 	// Package-level variables for top-level declarations.
 	var wroteGlobal bool
 	for _, s := range prog.Stmts {
@@ -252,7 +273,8 @@ func (g *gen) program(prog *ast.Program) {
 	g.line("func main() {")
 	g.indent++
 	for _, s := range prog.Stmts {
-		if _, ok := s.(*ast.FuncDecl); ok {
+		switch s.(type) {
+		case *ast.FuncDecl, *ast.RecordDecl:
 			continue
 		}
 		g.stmt(s)
@@ -261,16 +283,60 @@ func (g *gen) program(prog *ast.Program) {
 	g.line("}")
 }
 
+// recordDecl emits the Go struct and a String() method that renders values
+// as Name(field: value ...). Nested records beyond a small depth render as
+// Name(...) so a cyclic record (constructible with var mutation) cannot make
+// String() recurse forever.
+func (g *gen) recordDecl(rec *ast.RecordDecl) {
+	name := sanitize(rec.Name)
+	g.line("type %s struct {", name)
+	g.indent++
+	for _, f := range rec.Fields {
+		g.line("%s %s", sanitize(f.Name), g.goTypeExpr(f.Type))
+	}
+	g.indent--
+	g.line("}")
+
+	recv := "_r"
+	g.line("func (%s *%s) String() string { return %s._ink_str(0) }", recv, name, recv)
+	g.line("func (%s *%s) _ink_str(_ink_depth int) string {", recv, name)
+	g.indent++
+	g.line("if %s == nil {", recv)
+	g.line("\treturn \"<nil>\"")
+	g.line("}")
+	g.line("if _ink_depth >= 3 {")
+	g.line("\treturn %q", rec.Name+"(...)")
+	g.line("}")
+	var parts []string
+	for _, f := range rec.Fields {
+		parts = append(parts, fmt.Sprintf("%q + %s", f.Name+": ", g.recordFieldStr(recv+"."+sanitize(f.Name), f.Type)))
+	}
+	g.line("return %q + %s + \")\"", rec.Name+"(", strings.Join(parts, ` + ", " + `))
+	g.indent--
+	g.line("}")
+}
+
+// recordFieldStr renders a single field value to a string inside _ink_str,
+// recursing into nested records with an incremented depth.
+func (g *gen) recordFieldStr(expr string, t ast.TypeExpr) string {
+	if nt, ok := t.(*ast.NamedType); ok {
+		if _, isRecord := g.records[nt.Name]; isRecord {
+			return expr + "._ink_str(_ink_depth + 1)"
+		}
+	}
+	return "fmt.Sprint(" + expr + ")"
+}
+
 func (g *gen) funcDecl(fn *ast.FuncDecl) {
 	var params []string
 	for i, p := range fn.Params {
 		// The checker resolved parameter types; recover them from the
 		// annotation syntax to avoid carrying a second table around.
-		params = append(params, sanitize(p.Name)+" "+goTypeExpr(fn.Params[i].Type))
+		params = append(params, sanitize(p.Name)+" "+g.goTypeExpr(fn.Params[i].Type))
 	}
 	ret := ""
 	if fn.Ret != nil {
-		ret = " " + goTypeExpr(fn.Ret)
+		ret = " " + g.goTypeExpr(fn.Ret)
 	}
 	g.directive(fn.Pos())
 	g.line("func %s(%s)%s {", sanitize(fn.Name), strings.Join(params, ", "), ret)
@@ -483,6 +549,11 @@ func (g *gen) expr(b *strings.Builder, e ast.Expr, prec int) {
 		g.expr(b, e.Index, 0)
 		b.WriteByte(']')
 
+	case *ast.SelectorExpr:
+		g.expr(b, e.X, precPostfix)
+		b.WriteByte('.')
+		b.WriteString(sanitize(e.Name))
+
 	case *ast.UnaryExpr:
 		// Inkdown's 'not' binds looser than Go's '!', so parenthesize the
 		// operand unconditionally; same for '-' (also avoids "--x").
@@ -526,6 +597,20 @@ func (g *gen) call(b *strings.Builder, e *ast.CallExpr, prec int) {
 			g.expr(b, a, 0)
 		}
 		b.WriteByte(')')
+	}
+
+	// Record constructor: &Todo{field: value, ...}.
+	if rec, ok := g.records[e.Fun.Name]; ok {
+		b.WriteString("&" + sanitize(rec.Name) + "{")
+		for i, a := range e.Args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(sanitize(e.ArgNames[i]) + ": ")
+			g.expr(b, a, 0)
+		}
+		b.WriteByte('}')
+		return
 	}
 
 	switch e.Fun.Name {
@@ -661,12 +746,14 @@ func goType(t types.Type) string {
 		return "[]" + goType(t.Elem)
 	case *types.Opaque:
 		return "*_ink_" + t.Name
+	case *types.Record:
+		return "*" + sanitize(t.Name)
 	}
 	panic(fmt.Sprintf("unhandled type %v", t))
 }
 
 // goTypeExpr maps type syntax (already validated by the checker) to Go.
-func goTypeExpr(t ast.TypeExpr) string {
+func (g *gen) goTypeExpr(t ast.TypeExpr) string {
 	switch t := t.(type) {
 	case *ast.NamedType:
 		if t.Name == "float" {
@@ -675,9 +762,12 @@ func goTypeExpr(t ast.TypeExpr) string {
 		if stdlib.Types[t.Name] != nil {
 			return "*_ink_" + t.Name
 		}
+		if _, ok := g.records[t.Name]; ok {
+			return "*" + sanitize(t.Name)
+		}
 		return t.Name
 	case *ast.ListType:
-		return "[]" + goTypeExpr(t.Elem)
+		return "[]" + g.goTypeExpr(t.Elem)
 	}
 	panic("unreachable")
 }

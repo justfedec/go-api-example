@@ -84,6 +84,31 @@ func TestParseValid(t *testing.T) {
 			"let t = json.get(http.text(rs[0]), \"a.b\")",
 			`(program (let t (call json.get (call http.text (index rs 0)) "a.b")))`,
 		},
+		{
+			"record declaration",
+			"record Todo {\n  id: int\n  title: string\n  tags: [string]\n}",
+			`(program (record Todo (id int) (title string) (tags [string])))`,
+		},
+		{
+			"record with comma separators",
+			"record P { x: int, y: int }",
+			`(program (record P (x int) (y int)))`,
+		},
+		{
+			"constructor and selectors",
+			"let t = Todo(id: 1, title: \"x\")\nprint(t.title, todos[0].id)",
+			`(program (let t (call Todo id: 1 title: "x")) (expr (call print (sel t title) (sel (index todos 0) id))))`,
+		},
+		{
+			"selector assignment target",
+			"p.x = p.x + 1\ngrid[i].cell = 2",
+			`(program (= (sel p x) (+ (sel p x) 1)) (= (sel (index grid i) cell) 2))`,
+		},
+		{
+			"error binding declaration",
+			"let n, err = int(s)",
+			`(program (let n err (call int s)))`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,9 +142,13 @@ func TestParseErrors(t *testing.T) {
 		{"two statements one line", "f() g()\n", "expected newline after statement, found 'g'", 1, 5},
 		{"else without if", "else {\n}\n", "expected an expression, found 'else'", 1, 1},
 		{"leading dot number", "let a = .5\n", "expected an expression, found '.'", 1, 9},
-		{"dotted name without call", "let x = a.b\n", "expected '(' after 'a.b'", 1, 12},
-		{"dot on non identifier", "f().x(1)\n", "'.' is only valid in namespaced calls", 1, 4},
-		{"chained dots", "a.b.c(1)\n", "expected '(' after 'a.b'", 1, 4},
+		{"method call on index", "todos[0].f(1)\n", "records have no methods", 1, 11},
+		{"method call on call result", "f().x(1)\n", "records have no methods", 1, 6},
+		{"chained dot method", "a.b.c(1)\n", "records have no methods", 1, 6},
+		{"mixed named and positional", "T(a: 1, 2)\n", "cannot mix positional and named arguments", 1, 9},
+		{"two-name with annotation", "let x, y: int = f()\n", "does not take a type annotation", 1, 9},
+		{"record no fields", "record R {\n}\n", "needs at least one field", 2, 2},
+		{"record bad field sep", "record R {\n a: int b: int\n}\n", "expected ',' or a newline", 2, 9},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

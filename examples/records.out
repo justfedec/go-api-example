@@ -1,0 +1,6 @@
+3 4
+Point(x: 13, y: 4)
+13
+points: 2 sum of y: 5
+Segment(from: Point(x: 0, y: 0), to: Point(x: 13, y: 4))
+99

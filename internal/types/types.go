@@ -51,6 +51,38 @@ func (l *List) Equal(other Type) bool {
 	return ok && l.Elem.Equal(o.Elem)
 }
 
+// Record is a nominal record type declared with `record Name { ... }`.
+// Values are references (two bindings can alias one record); equality and
+// ordering are undefined, which the *Basic-only predicates below enforce
+// automatically.
+type Record struct {
+	Name   string
+	Fields []RecordField
+}
+
+// RecordField is one field of a Record.
+type RecordField struct {
+	Name string
+	Type Type
+}
+
+func (r *Record) String() string { return r.Name }
+
+func (r *Record) Equal(other Type) bool {
+	o, ok := other.(*Record)
+	return ok && o.Name == r.Name
+}
+
+// FieldType returns the type of the named field, or nil when absent.
+func (r *Record) FieldType(name string) Type {
+	for _, f := range r.Fields {
+		if f.Name == name {
+			return f.Type
+		}
+	}
+	return nil
+}
+
 // Opaque is a nominal handle type (server, request, response). Values exist
 // only through builtins: the type has no literal syntax and no operators.
 // Because IsNumeric/IsOrdered/IsComparable accept only *Basic, arithmetic,

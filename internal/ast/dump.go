@@ -54,8 +54,11 @@ func dump(b *strings.Builder, n Node) {
 		b.WriteByte(')')
 	case *CallExpr:
 		b.WriteString("(call " + n.Fun.Name)
-		for _, a := range n.Args {
+		for i, a := range n.Args {
 			b.WriteByte(' ')
+			if len(n.ArgNames) > 0 {
+				b.WriteString(n.ArgNames[i] + ": ")
+			}
 			dump(b, a)
 		}
 		b.WriteByte(')')
@@ -65,6 +68,10 @@ func dump(b *strings.Builder, n Node) {
 		b.WriteByte(' ')
 		dump(b, n.Index)
 		b.WriteByte(')')
+	case *SelectorExpr:
+		b.WriteString("(sel ")
+		dump(b, n.X)
+		b.WriteString(" " + n.Name + ")")
 	case *UnaryExpr:
 		op := opSpelling[n.Op]
 		if n.Op == token.MINUS {
@@ -98,6 +105,9 @@ func dump(b *strings.Builder, n Node) {
 			kw = "var"
 		}
 		b.WriteString("(" + kw + " " + n.Name)
+		if n.ErrName != "" {
+			b.WriteString(" " + n.ErrName)
+		}
 		if n.Ann != nil {
 			b.WriteString(":" + n.Ann.String())
 		}
@@ -147,6 +157,12 @@ func dump(b *strings.Builder, n Node) {
 	case *ExprStmt:
 		b.WriteString("(expr ")
 		dump(b, n.X)
+		b.WriteByte(')')
+	case *RecordDecl:
+		b.WriteString("(record " + n.Name)
+		for _, f := range n.Fields {
+			b.WriteString(" (" + f.Name + " " + f.Type.String() + ")")
+		}
 		b.WriteByte(')')
 	case *FuncDecl:
 		b.WriteString("(func " + n.Name + " (")

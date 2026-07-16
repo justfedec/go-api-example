@@ -77,12 +77,15 @@ type ListLit struct {
 	Elems []Expr
 }
 
-// CallExpr is a call to a named function or builtin; functions are not
-// values in v1, so the callee is always an identifier.
+// CallExpr is a call to a named function, builtin, or record constructor;
+// functions are not values, so the callee is always an identifier (dotted
+// for namespaced builtins). ArgNames is empty for positional calls; record
+// constructors fill it in parallel with Args (all-or-nothing).
 type CallExpr struct {
 	ExprBase
-	Fun  *Ident
-	Args []Expr
+	Fun      *Ident
+	Args     []Expr
+	ArgNames []string
 }
 
 // IndexExpr is xs[i].
@@ -90,6 +93,15 @@ type IndexExpr struct {
 	ExprBase
 	X     Expr
 	Index Expr
+}
+
+// SelectorExpr is x.field — record field access. Namespaced builtin calls
+// never produce this node (they fold into the callee Ident's name).
+type SelectorExpr struct {
+	ExprBase
+	X       Expr
+	Name    string
+	NamePos token.Pos
 }
 
 // UnaryExpr is -x or not x.
@@ -158,25 +170,30 @@ type Block struct {
 	Stmts []Stmt
 }
 
-// DeclStmt is a let or var declaration.
+// DeclStmt is a let or var declaration. The two-name form
+// `let x, err = f(...)` binds a fallible builtin's error message (a string,
+// "" on success) to ErrName.
 type DeclStmt struct {
 	StmtBase
 	Name    string
 	NamePos token.Pos
+	ErrName string // "" for the one-name form
+	ErrPos  token.Pos
 	Mutable bool     // var (true) or let (false)
 	Ann     TypeExpr // optional annotation, nil when inferred
 	Value   Expr
 
 	// Filled in by the checker for the code generator.
-	Global bool       // declared directly at the top level
-	VarT   types.Type // resolved variable type
-	Unused bool       // local never read (codegen emits "_ = x")
+	Global    bool       // declared directly at the top level
+	VarT      types.Type // resolved variable type
+	Unused    bool       // local never read (codegen emits "_ = x")
+	ErrUnused bool       // err binding never read
 }
 
 // AssignStmt is target = value, or a compound assignment.
 type AssignStmt struct {
 	StmtBase
-	Target Expr       // *Ident or *IndexExpr
+	Target Expr       // *Ident, *IndexExpr, or *SelectorExpr
 	Op     token.Kind // ASSIGN, PLUS_ASSIGN, ...
 	OpPos  token.Pos
 	Value  Expr
@@ -231,6 +248,21 @@ type Param struct {
 	Name    string
 	NamePos token.Pos
 	Type    TypeExpr
+}
+
+// Field is one record field.
+type Field struct {
+	Name    string
+	NamePos token.Pos
+	Type    TypeExpr
+}
+
+// RecordDecl is a top-level record type declaration.
+type RecordDecl struct {
+	StmtBase
+	Name    string
+	NamePos token.Pos
+	Fields  []Field
 }
 
 // FuncDecl is a top-level function declaration.

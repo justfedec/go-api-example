@@ -106,6 +106,33 @@ func total(xs: [int]) -> int {
 print(total([]))
 print(total([1, 2, 3]))
 `},
+		{"records: construct, select, mutate", `
+record Todo {
+  id: int
+  title: string
+  done: bool
+}
+var t = Todo(id: 1, title: "x", done: false)
+t.done = not t.done
+print(t.id, t.title, t.done)
+`},
+		{"records: nested, lists, and mutual references", `
+record A { b: B }
+record B { n: int }
+func first(xs: [A]) -> int { return xs[0].b.n }
+var as: [A] = []
+push(as, A(b: B(n: 7)))
+print(first(as))
+`},
+		{"records: recursive type declaration", `
+record Node { value: int, next: Node }
+func head(n: Node) -> int { return n.value }
+`},
+		{"records: field takes an empty list via constructor", `
+record Bag { items: [int] }
+let b = Bag(items: [])
+print(len(b.items))
+`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -181,6 +208,24 @@ func TestCheckErrors(t *testing.T) {
 		{"str as type", `let s: str = "x"`, "the type is called 'string'"},
 		{"duplicate function", "func f() {}\nfunc f() {}", "'f' is already declared"},
 		{"global vs function collision", "func f() {}\nlet f = 1", "'f' is already declared"},
+		{"record missing field", "record P { x: int, y: int }\nlet p = P(x: 1)", "missing the field 'y'"},
+		{"record unknown field", "record P { x: int }\nlet p = P(x: 1, z: 2)", "has no field 'z'"},
+		{"record field set twice", "record P { x: int }\nlet p = P(x: 1, x: 2)", "field 'x' is given twice"},
+		{"record positional args", "record P { x: int }\nlet p = P(1)", "takes named arguments"},
+		{"record field type mismatch", "record P { x: int }\nlet p = P(x: \"a\")", "field 'x' of 'P' is int, got a string value"},
+		{"record field named String", "record P { String: int }", "cannot be named 'String'"},
+		{"record duplicate field", "record P { x: int, x: int }", "already has a field 'x'"},
+		{"select on non record", "let n = 5\nprint(n.x)", "values of type int have no fields"},
+		{"select on handle", "let s = http.serve(0)\nprint(s.port)", "have no fields"},
+		{"unknown field access", "record P { x: int }\nlet p = P(x: 1)\nprint(p.y)", "has no field 'y'"},
+		{"record used as value", "record P { x: int }\nlet q = P", "is a record type; construct a value"},
+		{"record vs global collision", "record P { x: int }\nlet P = 1", "cannot redeclare record type 'P'"},
+		{"record vs builtin collision", "record len { x: int }", "cannot redeclare builtin 'len'"},
+		{"duplicate record", "record P { x: int }\nrecord P { y: int }", "record 'P' is already declared"},
+		{"named args to function", "func f(n: int) {}\nf(n: 1)", "named arguments are only for record constructors"},
+		{"method-style call on record", "record P { x: int }\nvar p = P(x: 1)\np.x(1)", "records have no methods"},
+		{"unused constructor result", "record P { x: int }\nP(x: 1)", "result of P(...) is unused"},
+		{"record constructor result discarded ok is error", "record P { x: int }\nfunc f() { P(x: 1) }", "result of P(...) is unused"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -18,6 +18,7 @@ const (
 
 	// Keywords.
 	FUNC
+	RECORD
 	RETURN
 	LET
 	VAR
@@ -74,7 +75,7 @@ var kindNames = map[Kind]string{
 	FLOAT:   "float literal",
 	STRING:  "string literal",
 
-	FUNC: "'func'", RETURN: "'return'", LET: "'let'", VAR: "'var'",
+	FUNC: "'func'", RECORD: "'record'", RETURN: "'return'", LET: "'let'", VAR: "'var'",
 	IF: "'if'", ELSE: "'else'", WHILE: "'while'", FOR: "'for'", IN: "'in'",
 	BREAK: "'break'", CONTINUE: "'continue'",
 	AND: "'and'", OR: "'or'", NOT: "'not'", TRUE: "'true'", FALSE: "'false'",
@@ -98,7 +99,7 @@ func (k Kind) String() string {
 
 // Keywords maps keyword spellings to their token kinds.
 var Keywords = map[string]Kind{
-	"func": FUNC, "return": RETURN, "let": LET, "var": VAR,
+	"func": FUNC, "record": RECORD, "return": RETURN, "let": LET, "var": VAR,
 	"if": IF, "else": ELSE, "while": WHILE, "for": FOR, "in": IN,
 	"break": BREAK, "continue": CONTINUE,
 	"and": AND, "or": OR, "not": NOT, "true": TRUE, "false": FALSE,
