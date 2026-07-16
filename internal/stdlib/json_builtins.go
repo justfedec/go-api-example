@@ -12,9 +12,9 @@ func init() {
 
 	str := types.String
 	register(
-		&Spec{Name: "json.get", Params: []types.Type{str, str}, Ret: str, GoFunc: "_ink_jsonGet", Chunk: "json"},
+		&Spec{Name: "json.get", Params: []types.Type{str, str}, Ret: str, GoFunc: "_ink_jsonGet", GoFuncErr: "_ink_jsonGetErr", Chunk: "json"},
 		&Spec{Name: "json.has", Params: []types.Type{str, str}, Ret: types.Bool, GoFunc: "_ink_jsonHas", Chunk: "json"},
-		&Spec{Name: "json.len", Params: []types.Type{str, str}, Ret: types.Int, GoFunc: "_ink_jsonLen", Chunk: "json"},
+		&Spec{Name: "json.len", Params: []types.Type{str, str}, Ret: types.Int, GoFunc: "_ink_jsonLen", GoFuncErr: "_ink_jsonLenErr", Chunk: "json"},
 		&Spec{Name: "json.escape", Params: []types.Type{str}, Ret: str, GoFunc: "_ink_jsonEscape", Chunk: "json"},
 	)
 
@@ -89,6 +89,50 @@ func _ink_jsonGet(doc, path string) string {
 		b, _ := json.Marshal(v)
 		return string(b)
 	}
+}
+
+// _ink_jsonGetErr is the recoverable form for 'let x, err = json.get(...)':
+// both an unparsable document and a missing path come back as an error
+// string instead of a panic — the shape you want for untrusted request
+// bodies.
+func _ink_jsonGetErr(doc, path string) (string, string) {
+	v, err := _ink_jsonDecode(doc)
+	if err != nil {
+		return "", "json.get: the document is not valid JSON: " + err.Error()
+	}
+	val, ok := _ink_jsonWalk(v, path)
+	if !ok {
+		return "", "json.get: no value at path " + strconv.Quote(path)
+	}
+	switch t := val.(type) {
+	case string:
+		return t, ""
+	case json.Number:
+		return string(t), ""
+	case bool:
+		return strconv.FormatBool(t), ""
+	case nil:
+		return "null", ""
+	default:
+		b, _ := json.Marshal(val)
+		return string(b), ""
+	}
+}
+
+func _ink_jsonLenErr(doc, path string) (int, string) {
+	v, err := _ink_jsonDecode(doc)
+	if err != nil {
+		return 0, "json.len: the document is not valid JSON: " + err.Error()
+	}
+	val, ok := _ink_jsonWalk(v, path)
+	if !ok {
+		return 0, "json.len: no value at path " + strconv.Quote(path)
+	}
+	arr, isArr := val.([]any)
+	if !isArr {
+		return 0, "json.len: the value at path " + strconv.Quote(path) + " is not an array"
+	}
+	return len(arr), ""
 }
 
 func _ink_jsonHas(doc, path string) bool {

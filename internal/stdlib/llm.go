@@ -16,17 +16,27 @@ func init() {
 	Roots["llm"] = true
 
 	register(
-		&Spec{Name: "llm.ask", Params: []types.Type{types.String, types.String}, MinArgs: 1, Ret: types.String, GoFunc: "_ink_llmAsk", Chunk: "llm"},
+		&Spec{Name: "llm.ask", Params: []types.Type{types.String, types.String}, MinArgs: 1, Ret: types.String, GoFunc: "_ink_llmAsk", GoFuncErr: "_ink_llmAskErr", Chunk: "llm"},
 	)
 
 	Chunks["llm"] = &Chunk{
 		Imports: []string{"bytes", "encoding/json", "io", "net/http", "os", "time"},
 		Src: `var _ink_llmClient = &http.Client{Timeout: 10 * time.Minute}
 
+// _ink_llmAsk is the panic-on-failure form; _ink_llmAskErr below is the
+// recoverable form for 'let reply, err = llm.ask(...)'.
 func _ink_llmAsk(prompt string, system ...string) string {
+	reply, msg := _ink_llmAskErr(prompt, system...)
+	if msg != "" {
+		panic(msg)
+	}
+	return reply
+}
+
+func _ink_llmAskErr(prompt string, system ...string) (string, string) {
 	key := os.Getenv("ANTHROPIC_API_KEY")
 	if key == "" {
-		panic("llm.ask: set the ANTHROPIC_API_KEY environment variable")
+		return "", "llm.ask: set the ANTHROPIC_API_KEY environment variable"
 	}
 	model := os.Getenv("INKDOWN_LLM_MODEL")
 	if model == "" {
@@ -58,12 +68,12 @@ func _ink_llmAsk(prompt string, system ...string) string {
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
-		panic("llm.ask: " + err.Error())
+		return "", "llm.ask: " + err.Error()
 	}
 
 	req, err := http.NewRequest("POST", base+"/v1/messages", bytes.NewReader(payload))
 	if err != nil {
-		panic("llm.ask: " + err.Error())
+		return "", "llm.ask: " + err.Error()
 	}
 	req.Header.Set("x-api-key", key)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -71,12 +81,12 @@ func _ink_llmAsk(prompt string, system ...string) string {
 
 	resp, err := _ink_llmClient.Do(req)
 	if err != nil {
-		panic("llm.ask: " + err.Error())
+		return "", "llm.ask: " + err.Error()
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		panic("llm.ask: the API returned HTTP " + strconv.Itoa(resp.StatusCode) + ": " + string(body))
+		return "", "llm.ask: the API returned HTTP " + strconv.Itoa(resp.StatusCode) + ": " + string(body)
 	}
 
 	var out struct {
@@ -90,24 +100,24 @@ func _ink_llmAsk(prompt string, system ...string) string {
 		} ` + "`json:\"stop_details\"`" + `
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		panic("llm.ask: cannot parse the API response: " + err.Error())
+		return "", "llm.ask: cannot parse the API response: " + err.Error()
 	}
 	if out.StopReason == "refusal" {
 		msg := "llm.ask: the model declined this request"
 		if out.StopDetails != nil && out.StopDetails.Explanation != "" {
 			msg += ": " + out.StopDetails.Explanation
 		}
-		panic(msg)
+		return "", msg
 	}
 	if out.StopReason == "max_tokens" {
-		panic("llm.ask: the reply was cut off by the token budget; raise INKDOWN_LLM_MAX_TOKENS (default 16000)")
+		return "", "llm.ask: the reply was cut off by the token budget; raise INKDOWN_LLM_MAX_TOKENS (default 16000)"
 	}
 	for _, block := range out.Content {
 		if block.Type == "text" {
-			return block.Text
+			return block.Text, ""
 		}
 	}
-	panic("llm.ask: the response contains no text")
+	return "", "llm.ask: the response contains no text"
 }
 `,
 	}

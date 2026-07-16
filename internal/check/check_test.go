@@ -133,6 +133,18 @@ record Bag { items: [int] }
 let b = Bag(items: [])
 print(len(b.items))
 `},
+		{"error binding on int and json", `
+let n, err = int("42")
+if err != "" { print(err) }
+print(n)
+let doc = "{}"
+let v, gerr = json.get(doc, "x")
+print(v, gerr)
+`},
+		{"error binding on float", `
+var f, e = float("3.5")
+print(f, e)
+`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,6 +238,11 @@ func TestCheckErrors(t *testing.T) {
 		{"method-style call on record", "record P { x: int }\nvar p = P(x: 1)\np.x(1)", "records have no methods"},
 		{"unused constructor result", "record P { x: int }\nP(x: 1)", "result of P(...) is unused"},
 		{"record constructor result discarded ok is error", "record P { x: int }\nfunc f() { P(x: 1) }", "result of P(...) is unused"},
+		{"err binding on non-fallible builtin", `let n, err = len("a")`, "'len' cannot fail"},
+		{"err binding on user function", "func f() -> int { return 1 }\nlet n, err = f()", "'f' cannot fail"},
+		{"err binding on non-call", `let n, err = 5`, "needs a call to a fallible builtin"},
+		{"err binding int on non-string", `let n, err = int(3.5)`, "can only fail on a string argument"},
+		{"err binding shadow collision", "let err = 1\nlet n, err = int(\"5\")", "'err' is already declared"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

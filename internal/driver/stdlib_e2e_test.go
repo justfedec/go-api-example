@@ -278,6 +278,26 @@ func TestReviewRegressions(t *testing.T) {
 			t.Errorf("stdout = %q, want \"5\\n\"", stdout.String())
 		}
 	})
+
+	t.Run("error binding recovers instead of panicking", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code, err := Run(filepath.Join("testdata", "errbind.md"), Options{Stdout: &stdout, Stderr: &stderr})
+		if err != nil || code != 0 {
+			t.Fatalf("Run: %v, code %d, stderr:\n%s", err, code, stderr.String())
+		}
+		// The last line's exact Go json error text varies by version, so
+		// match the stable prefix.
+		prefix := "42 true\n" +
+			"0 int(): cannot parse \"oops\" as an integer\n" +
+			"3 true\n" +
+			"json.get: no value at path \"nope\"\n" +
+			"2 true\n" +
+			"json.get: the document is not valid JSON:"
+		if !strings.HasPrefix(stdout.String(), prefix) {
+			t.Errorf("stdout:\n%q\ndoes not start with:\n%q", stdout.String(), prefix)
+		}
+	})
 }
 
 func TestLLMAskRefusal(t *testing.T) {

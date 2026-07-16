@@ -12,12 +12,13 @@ import "github.com/justfedec/inkdown/internal/types"
 
 // Spec describes one table builtin.
 type Spec struct {
-	Name    string       // "split" or "http.get"
-	Params  []types.Type // full parameter list
-	MinArgs int          // minimum arity for optional trailing params; 0 means len(Params)
-	Ret     types.Type   // nil: no value
-	GoFunc  string       // prelude helper the call lowers to, e.g. "_ink_split"
-	Chunk   string       // prelude chunk that defines GoFunc
+	Name      string       // "split" or "http.get"
+	Params    []types.Type // full parameter list
+	MinArgs   int          // minimum arity for optional trailing params; 0 means len(Params)
+	Ret       types.Type   // nil: no value
+	GoFunc    string       // prelude helper the call lowers to, e.g. "_ink_split"
+	GoFuncErr string       // (T, string) variant for `let x, err = f(...)`; "" if not fallible
+	Chunk     string       // prelude chunk that defines GoFunc
 }
 
 // Min returns the minimum number of arguments for the spec.

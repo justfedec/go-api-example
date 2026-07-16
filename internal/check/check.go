@@ -87,6 +87,7 @@ type symbol struct {
 	used bool
 
 	decl    *ast.DeclStmt // local declarations, for unused marking
+	errSlot bool          // the err binding of a two-name decl (marks ErrUnused)
 	forStmt *ast.ForStmt  // loop variables, for unused marking
 }
 
@@ -184,7 +185,11 @@ func closeScope(sc *scope) {
 			continue
 		}
 		if sym.decl != nil && !sym.decl.Global {
-			sym.decl.Unused = true
+			if sym.errSlot {
+				sym.decl.ErrUnused = true
+			} else {
+				sym.decl.Unused = true
+			}
 		}
 		if sym.forStmt != nil {
 			sym.forStmt.Unused = true
@@ -354,6 +359,10 @@ func (c *checker) condition(sc *scope, e ast.Expr, kw string) {
 }
 
 func (c *checker) declStmt(sc *scope, s *ast.DeclStmt) {
+	if s.ErrName != "" {
+		c.errBindingStmt(sc, s)
+		return
+	}
 	var expected types.Type
 	if s.Ann != nil {
 		expected = c.resolveType(s.Ann)
@@ -374,6 +383,41 @@ func (c *checker) declStmt(sc *scope, s *ast.DeclStmt) {
 		kind = symVar
 	}
 	c.declare(sc, s.NamePos, &symbol{name: s.Name, kind: kind, typ: expected, decl: s})
+}
+
+// errBindingStmt checks `let x, err = f(...)`: the initializer must be a call
+// to a fallible builtin; x gets the builtin's value type and err is a string.
+func (c *checker) errBindingStmt(sc *scope, s *ast.DeclStmt) {
+	call, ok := s.Value.(*ast.CallExpr)
+	if !ok {
+		c.errf(s.Value.Pos(), "the two-name form 'x, err = ...' needs a call to a fallible builtin (int, float, json.get, json.len, or llm.ask)")
+	}
+	spec := stdlib.Specs[call.Fun.Name]
+	fallible := spec != nil && spec.GoFuncErr != ""
+	// int()/float() are fallible only for a string argument; they live in the
+	// manual switch, not the table.
+	isConv := call.Fun.Name == "int" || call.Fun.Name == "float"
+	if !fallible && !isConv {
+		c.errf(call.Pos(), "'%s' cannot fail, so it has no error to bind (drop the ', %s')", call.Fun.Name, s.ErrName)
+	}
+
+	valT := c.exprValue(sc, call, nil)
+
+	if isConv {
+		if len(call.Args) != 1 || !call.Args[0].Type().Equal(types.String) {
+			c.errf(call.Pos(), "%s(...) can only fail on a string argument; the two-name form needs %s(someString)", call.Fun.Name, call.Fun.Name)
+		}
+	}
+
+	s.Global = sc == c.global
+	s.VarT = valT
+
+	kind := symLet
+	if s.Mutable {
+		kind = symVar
+	}
+	c.declare(sc, s.NamePos, &symbol{name: s.Name, kind: kind, typ: valT, decl: s})
+	c.declare(sc, s.ErrPos, &symbol{name: s.ErrName, kind: kind, typ: types.String, decl: s, errSlot: true})
 }
 
 func (c *checker) assignStmt(sc *scope, s *ast.AssignStmt) {

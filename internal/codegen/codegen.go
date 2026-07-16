@@ -196,18 +196,34 @@ const prelude = `func _ink_range(a, b int) []int {
 	return xs
 }
 
-func _ink_parseInt(s string) int {
+func _ink_parseIntErr(s string) (int, string) {
 	n, err := strconv.Atoi(s)
 	if err != nil {
-		panic("int(): cannot parse " + strconv.Quote(s) + " as an integer")
+		return 0, "int(): cannot parse " + strconv.Quote(s) + " as an integer"
+	}
+	return n, ""
+}
+
+func _ink_parseInt(s string) int {
+	n, msg := _ink_parseIntErr(s)
+	if msg != "" {
+		panic(msg)
 	}
 	return n
 }
 
-func _ink_parseFloat(s string) float64 {
+func _ink_parseFloatErr(s string) (float64, string) {
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		panic("float(): cannot parse " + strconv.Quote(s) + " as a number")
+		return 0, "float(): cannot parse " + strconv.Quote(s) + " as a number"
+	}
+	return f, ""
+}
+
+func _ink_parseFloat(s string) float64 {
+	f, msg := _ink_parseFloatErr(s)
+	if msg != "" {
+		panic(msg)
 	}
 	return f
 }
@@ -258,6 +274,9 @@ func (g *gen) program(prog *ast.Program) {
 				wroteGlobal = true
 			}
 			g.line("var %s %s", sanitize(d.Name), goType(d.VarT))
+			if d.ErrName != "" {
+				g.line("var %s string", sanitize(d.ErrName))
+			}
 		}
 	}
 
@@ -388,6 +407,22 @@ func (g *gen) stmt(s ast.Stmt) {
 	switch s := s.(type) {
 	case *ast.DeclStmt:
 		name := sanitize(s.Name)
+		if s.ErrName != "" {
+			errName := sanitize(s.ErrName)
+			call := s.Value.(*ast.CallExpr)
+			op := ":="
+			if s.Global {
+				op = "="
+			}
+			g.line("%s, %s %s %s", name, errName, op, g.errCall(call))
+			if s.Unused {
+				g.line("_ = %s", name)
+			}
+			if s.ErrUnused {
+				g.line("_ = %s", errName)
+			}
+			return
+		}
 		switch {
 		case s.Global:
 			g.line("%s = %s", name, g.exprString(s.Value, 0))
@@ -585,6 +620,30 @@ func (g *gen) expr(b *strings.Builder, e ast.Expr, prec int) {
 	default:
 		panic(fmt.Sprintf("unhandled expression %T", e))
 	}
+}
+
+// errCall renders the (value, error) form of a fallible builtin for the
+// two-name declaration `let x, err = f(...)`.
+func (g *gen) errCall(e *ast.CallExpr) string {
+	goFunc := ""
+	switch e.Fun.Name {
+	case "int":
+		goFunc = "_ink_parseIntErr"
+	case "float":
+		goFunc = "_ink_parseFloatErr"
+	default:
+		goFunc = stdlib.Specs[e.Fun.Name].GoFuncErr
+	}
+	var b strings.Builder
+	b.WriteString(goFunc + "(")
+	for i, a := range e.Args {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		g.expr(&b, a, 0)
+	}
+	b.WriteByte(')')
+	return b.String()
 }
 
 func (g *gen) call(b *strings.Builder, e *ast.CallExpr, prec int) {
