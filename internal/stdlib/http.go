@@ -50,7 +50,7 @@ func init() {
 	// //line directive, so every helper guards nil with a self-describing
 	// message instead of letting Go nil-deref in an unmapped frame.
 	Chunks["httpserver"] = &Chunk{
-		Imports: []string{"io", "net", "net/http"},
+		Imports: []string{"io", "net", "net/http", "time"},
 		Src: `type _ink_request struct {
 	w        http.ResponseWriter
 	r        *http.Request
@@ -67,7 +67,8 @@ func (q *_ink_request) String() string {
 }
 
 type _ink_server struct {
-	reqs chan *_ink_request
+	reqs    chan *_ink_request
+	pending *_ink_request // handed out by the last http.next, not yet answered
 }
 
 func (s *_ink_server) String() string {
@@ -80,21 +81,28 @@ func (s *_ink_server) String() string {
 // _ink_serve listens synchronously — a taken port panics here, in the frame
 // mapped to the http.serve call — then accepts in the background. Handler
 // goroutines park each request on the queue and wait until it is answered,
-// so the program handles exactly one request at a time.
+// so the program handles exactly one request at a time. Server-level
+// timeouts guard against slow or idle clients but never fire on a request
+// waiting its turn in the queue (the body is already read, and there is no
+// per-response write deadline).
 func _ink_serve(port int) *_ink_server {
 	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		panic("http.serve: " + err.Error())
 	}
 	srv := &_ink_server{reqs: make(chan *_ink_request, 64)}
-	go func() {
-		_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := &http.Server{
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(r.Body)
 			q := &_ink_request{w: w, r: r, reqBody: string(b), done: make(chan struct{})}
 			srv.reqs <- q
 			<-q.done
-		}))
-	}()
+		}),
+	}
+	go func() { _ = server.Serve(ln) }()
 	return srv
 }
 
@@ -102,7 +110,12 @@ func _ink_next(s *_ink_server) *_ink_request {
 	if s == nil {
 		panic("http.next: server handle is uninitialized")
 	}
-	return <-s.reqs
+	if s.pending != nil && !s.pending.answered {
+		panic("http.next: the previous request was never answered (every request needs exactly one http.respond)")
+	}
+	q := <-s.reqs
+	s.pending = q
+	return q
 }
 
 func _ink_reqGuard(q *_ink_request, fn string) {

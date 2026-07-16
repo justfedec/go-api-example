@@ -154,6 +154,58 @@ func TestTodoAPIExample(t *testing.T) {
 	}
 }
 
+// TestUnansweredRequestPanics checks the server guard: pulling a second
+// request off the queue before answering the first is a clear panic, not a
+// silent deadlock.
+func TestUnansweredRequestPanics(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "server")
+	if err := Build(filepath.Join("testdata", "unanswered.md"), Options{Out: bin}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	cmd := exec.Command(bin)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server never came up:\n%s", stderr.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Two requests: the first is taken and never answered, the second makes
+	// http.next panic. Fire both without waiting for a response body.
+	client := &http.Client{Timeout: time.Second}
+	go client.Get("http://" + addr + "/one")
+	time.Sleep(200 * time.Millisecond)
+	go client.Get("http://" + addr + "/two")
+
+	err = cmd.Wait()
+	if err == nil {
+		t.Fatal("expected the server to exit nonzero")
+	}
+	if !strings.Contains(stderr.String(), "the previous request was never answered") {
+		t.Errorf("stderr missing the guard message:\n%s", stderr.String())
+	}
+}
+
 func TestHTTPClientEndToEnd(t *testing.T) {
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
