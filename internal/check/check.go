@@ -392,13 +392,26 @@ func (c *checker) errBindingStmt(sc *scope, s *ast.DeclStmt) {
 	if !ok {
 		c.errf(s.Value.Pos(), "the two-name form 'x, err = ...' needs a call to a fallible builtin (int, float, json.get, json.len, or llm.ask)")
 	}
-	spec := stdlib.Specs[call.Fun.Name]
+	name := call.Fun.Name
+	spec := stdlib.Specs[name]
 	fallible := spec != nil && spec.GoFuncErr != ""
 	// int()/float() are fallible only for a string argument; they live in the
 	// manual switch, not the table.
-	isConv := call.Fun.Name == "int" || call.Fun.Name == "float"
+	isConv := name == "int" || name == "float"
 	if !fallible && !isConv {
-		c.errf(call.Pos(), "'%s' cannot fail, so it has no error to bind (drop the ', %s')", call.Fun.Name, s.ErrName)
+		// Distinguish "not a fallible builtin" from "not defined at all", so a
+		// typo in the two-name form isn't reported as "cannot fail".
+		known := builtinNames[name] || stdlib.Specs[name] != nil || stdlib.Roots[name] ||
+			c.records[name] != nil || sc.lookup(name) != nil
+		if strings.Contains(name, ".") {
+			if root := name[:strings.IndexByte(name, '.')]; stdlib.Roots[root] {
+				known = true
+			}
+		}
+		if !known {
+			c.errf(call.Pos(), "'%s' is not defined", name)
+		}
+		c.errf(call.Pos(), "'%s' cannot fail, so it has no error to bind (drop the ', %s')", name, s.ErrName)
 	}
 
 	valT := c.exprValue(sc, call, nil)
@@ -649,7 +662,7 @@ func (c *checker) exprInner(sc *scope, e ast.Expr, expected types.Type) types.Ty
 			c.errf(e.Pos(), "'%s' is not defined", e.Name)
 		}
 		if sym.kind == symFunc {
-			c.errf(e.Pos(), "function '%s' can only be called (functions are not values in v1)", e.Name)
+			c.errf(e.Pos(), "function '%s' can only be called (functions are not values)", e.Name)
 		}
 		sym.used = true
 		return sym.typ
@@ -685,7 +698,7 @@ func (c *checker) exprInner(sc *scope, e ast.Expr, expected types.Type) types.Ty
 		list, ok := xt.(*types.List)
 		if !ok {
 			if xt.Equal(types.String) {
-				c.errf(e.X.Pos(), "strings cannot be indexed in v1")
+				c.errf(e.X.Pos(), "strings cannot be indexed (use str.slice)")
 			}
 			c.errf(e.X.Pos(), "cannot index a value of type %s", xt)
 		}
@@ -795,6 +808,9 @@ func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 		t := c.exprValue(sc, e.Args[0], nil)
 		if _, isOpaque := t.(*types.Opaque); isOpaque {
 			c.errf(e.Args[0].Pos(), "str() cannot convert a %s handle to a string", t)
+		}
+		if _, isRecord := t.(*types.Record); isRecord {
+			c.errf(e.Args[0].Pos(), "str() cannot convert a %s record to a string (print() renders it)", t)
 		}
 		return types.String
 

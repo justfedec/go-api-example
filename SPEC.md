@@ -467,7 +467,7 @@ Concurrent requests queue. See §8 for runtime details.
 | `http.header(req, name)`         | `request, string → string`       | `""` when absent |
 | `http.query(req, name)`          | `request, string → string`       | query parameter, `""` when absent |
 | `http.set_header(req, n, v)`     | `request, string, string → (no value)` | must precede `http.respond`; panics after it |
-| `http.respond(req, status, body)`| `request, int, string → (no value)` | answers and releases the request; panics if already answered |
+| `http.respond(req, status, body)`| `request, int, string → (no value)` | answers and releases the request; panics if already answered, or if `status` is outside 100–599 |
 
 ### 7.5 HTTP client (`http.`)
 
@@ -608,13 +608,14 @@ listlit     = "[" [ exprargs ] "]" ;
 exprargs    = expr { "," expr } [ "," ] ;
 ```
 
-Postfix disambiguation: `IDENT "." IDENT "("` where the first identifier is a
-namespace root is a namespaced call (folded to one qualified name);
-`x "." IDENT` otherwise is a field selection; a field selection followed by
-`(` is rejected (records have no methods). Named arguments (`IDENT ":" expr`)
-are accepted by the grammar for any call but restricted to record
-constructors by the checker; the two-name `decl` is restricted to fallible
-builtins by the checker.
+Postfix disambiguation: `IDENT "." IDENT "("` folds into one qualified name
+(a namespaced call) for **any** identifier base — the checker then rejects a
+qualifier that is not an actual namespace root (`x.f(...)` where `x` is a
+value or record is "records have no methods"). `x "." IDENT` not followed by
+`(` is a field selection; a field selection followed by `(` is rejected in the
+parser. Named arguments (`IDENT ":" expr`) are accepted by the grammar for any
+call but restricted to record constructors by the checker; the two-name `decl`
+is restricted to fallible builtins by the checker.
 
 ## 10. Diagnostics
 

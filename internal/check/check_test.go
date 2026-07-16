@@ -246,6 +246,8 @@ func TestCheckErrors(t *testing.T) {
 		{"err binding on non-call", `let n, err = 5`, "needs a call to a fallible builtin"},
 		{"err binding int on non-string", `let n, err = int(3.5)`, "can only fail on a string argument"},
 		{"err binding shadow collision", "let err = 1\nlet n, err = int(\"5\")", "'err' is already declared"},
+		{"err binding typo'd callee", `let n, err = itn("5")`, "'itn' is not defined"},
+		{"str of record", "record P { x: int }\nlet p = P(x: 1)\nlet s = str(p)", "cannot convert a P record"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

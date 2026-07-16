@@ -331,6 +331,24 @@ func TestReviewRegressions(t *testing.T) {
 		}
 	})
 
+	t.Run("cyclic record print collapses at the depth cap", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code, err := Run(filepath.Join("testdata", "cyclerecord.md"), Options{Stdout: &stdout, Stderr: &stderr})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if code != 0 {
+			t.Fatalf("exit code = %d (a stack overflow would be nonzero); stderr:\n%s", code, stderr.String())
+		}
+		// The cycle must terminate at the depth cap rather than recurse
+		// forever; the exact rendering is the depth-3 collapse.
+		want := "Node(val: 1, next: [Node(val: 2, next: [Node(val: 1, next: [Node(...)])])])\n"
+		if stdout.String() != want {
+			t.Errorf("stdout = %q, want %q", stdout.String(), want)
+		}
+	})
+
 	t.Run("error binding recovers instead of panicking", func(t *testing.T) {
 		t.Parallel()
 		var stdout, stderr bytes.Buffer

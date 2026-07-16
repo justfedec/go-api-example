@@ -92,7 +92,7 @@ func Build(file string, opts Options) error {
 // unchanged program (same generated Go, same Go toolchain) skips the ~2s
 // `go build` and executes a cached native binary directly.
 func Run(file string, opts Options) (int, error) {
-	bin, cleanup, err := binaryFor(file, opts)
+	bin, cleanup, cacheEntry, err := binaryFor(file, opts)
 	if err != nil {
 		return 1, err
 	}
@@ -107,29 +107,39 @@ func Run(file string, opts Options) (int, error) {
 		if errors.As(err, &exit) {
 			return exit.ExitCode(), nil
 		}
+		// The binary would not start (corrupt cache entry, or one built for a
+		// different target). If it came from the cache, evict it and recompile
+		// once with caching off.
+		if cacheEntry != "" {
+			os.RemoveAll(cacheEntry)
+			return Run(file, Options{EmitGo: opts.EmitGo, NoCache: true,
+				Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: opts.Stdin})
+		}
 		return 1, fmt.Errorf("running %s: %w", file, err)
 	}
 	return 0, nil
 }
 
 // binaryFor returns a runnable binary for file, using the cache when enabled.
-// A cache hit returns the cached path with a no-op cleanup; a miss compiles,
-// stores the binary in the cache, and returns it. When --emit-go is set (or
-// the cache directory is unusable), it falls back to a throwaway build.
-func binaryFor(file string, opts Options) (bin string, cleanup func(), err error) {
+// A cache hit returns the cached path (and its entry dir, so a failed exec can
+// evict it) with a no-op cleanup; a miss compiles, stores the binary in the
+// cache, and returns it. When --emit-go is set (or the cache directory is
+// unusable), it falls back to a throwaway build with an empty entry.
+func binaryFor(file string, opts Options) (bin string, cleanup func(), cacheEntry string, err error) {
 	goSrc, err := CompileToGo(file)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	if opts.EmitGo != "" {
 		if werr := os.WriteFile(opts.EmitGo, goSrc, 0o644); werr != nil {
-			return "", nil, werr
+			return "", nil, "", werr
 		}
 	}
 
 	dir := cacheDir()
 	if opts.NoCache || opts.EmitGo != "" || dir == "" {
-		return compileToBinaryFrom(goSrc, file)
+		bin, cleanup, err = compileToBinaryFrom(goSrc, file)
+		return bin, cleanup, "", err
 	}
 
 	entry := filepath.Join(dir, cacheKey(goSrc))
@@ -137,21 +147,21 @@ func binaryFor(file string, opts Options) (bin string, cleanup func(), err error
 	if _, statErr := os.Stat(cachedBin); statErr == nil {
 		now := time.Now()
 		os.Chtimes(cachedBin, now, now) // mark as recently used for pruning
-		return cachedBin, func() {}, nil
+		return cachedBin, func() {}, entry, nil
 	}
 
 	bin, cleanup, err = compileToBinaryFrom(goSrc, file)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	// Populate the cache atomically: copy into the entry dir, then rename
 	// within the same filesystem. Any failure just leaves the cache unfilled.
 	if err := storeInCache(entry, cachedBin, bin); err == nil {
 		cleanup()
 		pruneCache(dir)
-		return cachedBin, func() {}, nil
+		return cachedBin, func() {}, entry, nil
 	}
-	return bin, cleanup, nil
+	return bin, cleanup, "", nil
 }
 
 func orDefault[T comparable](v, def T) T {
@@ -264,8 +274,10 @@ var (
 	toolchainID   string
 )
 
-// goToolchainID returns the identity of the `go` in PATH (its version line),
-// cached once per process.
+// goToolchainID returns the identity of the `go` in PATH — its version line
+// plus the effective target platform (GOOS/GOARCH honor env vars and
+// `go env -w`, which the version line does not reflect) — cached once per
+// process.
 func goToolchainID() string {
 	toolchainOnce.Do(func() {
 		goTool, err := exec.LookPath("go")
@@ -273,12 +285,13 @@ func goToolchainID() string {
 			toolchainID = "no-go"
 			return
 		}
-		out, err := exec.Command(goTool, "version").Output()
+		ver, err := exec.Command(goTool, "version").Output()
 		if err != nil {
 			toolchainID = goTool
 			return
 		}
-		toolchainID = strings.TrimSpace(string(out))
+		target, _ := exec.Command(goTool, "env", "GOOS", "GOARCH").Output()
+		toolchainID = strings.TrimSpace(string(ver)) + "|" + strings.TrimSpace(string(target))
 	})
 	return toolchainID
 }
