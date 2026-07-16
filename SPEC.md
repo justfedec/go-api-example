@@ -180,8 +180,9 @@ statement.
 Stdlib builtins live in the namespaces `http`, `json`, and `llm` and are
 called with a dotted name: `http.get(url)`, `json.escape(s)`, `llm.ask(p)`.
 The dot exists **only in call position**: `http.get` without an argument
-list, a dot after anything but a plain identifier, and chained dots are all
-syntax errors. Namespace roots are reserved (§2.2) but user identifiers can
+list, a dot after anything but an identifier, and chained dots are all syntax
+errors (grouping parentheses are transparent, so `(http).get(u)` parses like
+`http.get(u)`). Namespace roots are reserved (§2.2) but user identifiers can
 never contain a dot, so dotted names cannot collide with user code.
 
 ### 4.4 List literals
@@ -376,15 +377,19 @@ Concurrent requests queue. See §8 for runtime details.
 
 ### 7.5 HTTP client (`http.`)
 
-The client **never panics**: a transport failure (unreachable host, bad URL)
-yields a response with `http.ok` false, status `0`, and the error message as
-its text. HTTP-level errors are ordinary responses — check `http.status`.
+The client **never panics on network weather** (a malformed header string is
+a programmer error and does panic). `http.ok` is true iff a **complete**
+response was received: on failure before any response arrives, status is `0`
+and the text is the error message; if the headers arrived but the body could
+not be read, `http.ok` is false while `http.status` keeps the received code.
+HTTP-level errors are ordinary responses — check `http.status`. Redirects are
+followed automatically (up to 10); requests time out after 10 minutes.
 
 | Builtin                          | Signature                            | Notes |
 | -------------------------------- | ------------------------------------ | ----- |
 | `http.get(url)`                  | `string → response`                  | |
 | `http.post(url, body)`           | `string, string → response`          | sends `Content-Type: application/json` |
-| `http.request(m, url, hs, body)` | `string, string, [string], string → response` | headers as `"Name: value"` strings |
+| `http.request(m, url, hs, body)` | `string, string, [string], string → response` | headers as `"Name: value"` strings; a malformed entry panics |
 | `http.status(resp)`              | `response → int`                     | `0` on transport failure |
 | `http.text(resp)`                | `response → string`                  | response body (the error message on transport failure) |
 | `http.ok(resp)`                  | `response → bool`                    | true iff an HTTP response was received |
@@ -393,6 +398,10 @@ its text. HTTP-level errors are ordinary responses — check `http.status`.
 
 JSON stays a string; `json.get` walks it with a dot-separated path — object
 keys by name, array elements by index (`"todos.0.title"`; `""` is the root).
+Numbers come back **exactly as written in the document** (no scientific
+notation, no precision loss on large integers). Two limitations: object keys
+that themselves contain a dot cannot be addressed, and an unparsable document
+makes `json.get`/`json.len` panic (`json.has` just returns false).
 
 | Builtin               | Signature                    | Notes |
 | --------------------- | ---------------------------- | ----- |
@@ -409,7 +418,8 @@ keys by name, array elements by index (`"todos.0.title"`; `""` is the root).
 | `llm.ask(prompt, system)`| `string, string → string`      | same, with a system prompt |
 
 `llm.ask` panics with a self-describing message when `ANTHROPIC_API_KEY` is
-unset, the API returns a non-200 status, or the model declines the request.
+unset, the API returns a non-200 status, the model declines the request, or
+the reply is cut off by the token budget.
 Configuration comes from the environment: `ANTHROPIC_API_KEY` (required),
 `INKDOWN_LLM_MODEL` (default `claude-opus-4-8`), `INKDOWN_LLM_MAX_TOKENS`
 (default `16000`), and `ANTHROPIC_BASE_URL` (default
@@ -429,9 +439,9 @@ The compiled program depends only on the Go standard library — `http.` and
 `llm.` included — so builds are hermetic and binaries are self-contained.
 
 **Server model.** `http.serve` binds its port before returning and accepts
-connections in the background; incoming requests queue (the queue holds 64
-pending requests; further clients block on the network) until the program
-takes them with `http.next`. Handling is strictly sequential — there is no
+connections in the background; incoming requests are held — a buffered queue
+of 64 plus one goroutine per additional connection — until the program takes
+them with `http.next`. Handling is strictly sequential — there is no
 concurrency in the language — and a response is fully flushed to the client
 before `http.respond` returns, so a program may exit immediately after
 answering its last request without truncating it. A `while true` accept loop

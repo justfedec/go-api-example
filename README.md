@@ -64,9 +64,9 @@ inkdown run examples/todo-api.md
 | Command                                | What it does                              |
 | -------------------------------------- | ----------------------------------------- |
 | `inkdown run program.md`               | compile and execute                        |
-| `inkdown build program.md [-o name]`   | produce a native binary (default: `program`) |
+| `inkdown build [-o name] program.md`   | produce a native binary (default: `program`) |
 | `inkdown check program.md`             | parse and type-check only                  |
-| `... --emit-go out.go`                 | (run/build) also write the generated Go    |
+| `inkdown run --emit-go out.go program.md` | also write the generated Go (flags go before the file) |
 
 ## The language in 30 seconds
 
@@ -208,8 +208,9 @@ servers.
 go test ./...
 ```
 
-Every stage has unit tests, the golden suite runs the deterministic examples
-end to end, and the e2e suite builds real binaries: a web server exercised
+The front-end stages have unit tests; codegen, the stdlib, and the driver
+are covered end to end — the golden suite runs the deterministic examples,
+and the e2e suite builds real binaries: a web server exercised
 over TCP, the HTTP client against `httptest`, and `llm.ask` against a fake
 Messages API (`ANTHROPIC_BASE_URL`) — no test needs the network or an API
 key.

@@ -99,6 +99,9 @@ func _ink_llmAsk(prompt string, system ...string) string {
 		}
 		panic(msg)
 	}
+	if out.StopReason == "max_tokens" {
+		panic("llm.ask: the reply was cut off by the token budget; raise INKDOWN_LLM_MAX_TOKENS (default 16000)")
+	}
 	for _, block := range out.Content {
 		if block.Type == "text" {
 			return block.Text

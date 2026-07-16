@@ -35,11 +35,12 @@ func _ink_exit(code int) { os.Exit(code) }
 
 var _ink_stdin = bufio.NewReader(os.Stdin)
 
-// _ink_readLine returns the next stdin line without its terminator, or ""
-// at end of input.
+// _ink_readLine returns the next stdin line without its terminator ("\n" or
+// "\r\n" — exactly one), or "" at end of input.
 func _ink_readLine() string {
 	line, _ := _ink_stdin.ReadString('\n')
-	return strings.TrimRight(line, "\r\n")
+	line = strings.TrimSuffix(line, "\n")
+	return strings.TrimSuffix(line, "\r")
 }
 `,
 	}

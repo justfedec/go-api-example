@@ -20,13 +20,29 @@ func init() {
 
 	Chunks["json"] = &Chunk{
 		Imports: []string{"encoding/json", "strings"},
-		Src: `// _ink_jsonLookup walks a dot-separated path ("" is the document root;
-// numeric segments index arrays) and reports whether a value exists there.
-func _ink_jsonLookup(doc, path string) (any, bool) {
+		Src: `// _ink_jsonDecode parses with UseNumber so numbers keep their original
+// literal form: no scientific notation, no float64 precision loss.
+func _ink_jsonDecode(doc string) (any, error) {
+	dec := json.NewDecoder(strings.NewReader(doc))
+	dec.UseNumber()
 	var v any
-	if err := json.Unmarshal([]byte(doc), &v); err != nil {
-		return nil, false
+	err := dec.Decode(&v)
+	return v, err
+}
+
+// _ink_jsonRoot is the panicking decode used by json.get and json.len; an
+// unparsable document is a programmer error, distinct from a missing path.
+func _ink_jsonRoot(fn, doc string) any {
+	v, err := _ink_jsonDecode(doc)
+	if err != nil {
+		panic(fn + ": the document is not valid JSON: " + err.Error())
 	}
+	return v
+}
+
+// _ink_jsonWalk follows a dot-separated path ("" is the document root;
+// numeric segments index arrays) and reports whether a value exists there.
+func _ink_jsonWalk(v any, path string) (any, bool) {
 	if path == "" {
 		return v, true
 	}
@@ -52,18 +68,19 @@ func _ink_jsonLookup(doc, path string) (any, bool) {
 }
 
 // _ink_jsonGet returns scalars in string form (int() and float() convert
-// them onward); objects and arrays come back as compact JSON, ready to be
-// fed to json.get again.
+// them onward — numbers come back exactly as written in the document);
+// objects and arrays come back as compact JSON, ready to be fed to json.get
+// again.
 func _ink_jsonGet(doc, path string) string {
-	v, ok := _ink_jsonLookup(doc, path)
+	v, ok := _ink_jsonWalk(_ink_jsonRoot("json.get", doc), path)
 	if !ok {
 		panic("json.get: no value at path " + strconv.Quote(path) + " (guard with json.has)")
 	}
 	switch t := v.(type) {
 	case string:
 		return t
-	case float64:
-		return strconv.FormatFloat(t, 'g', -1, 64)
+	case json.Number:
+		return string(t)
 	case bool:
 		return strconv.FormatBool(t)
 	case nil:
@@ -75,12 +92,16 @@ func _ink_jsonGet(doc, path string) string {
 }
 
 func _ink_jsonHas(doc, path string) bool {
-	_, ok := _ink_jsonLookup(doc, path)
+	v, err := _ink_jsonDecode(doc)
+	if err != nil {
+		return false
+	}
+	_, ok := _ink_jsonWalk(v, path)
 	return ok
 }
 
 func _ink_jsonLen(doc, path string) int {
-	v, ok := _ink_jsonLookup(doc, path)
+	v, ok := _ink_jsonWalk(_ink_jsonRoot("json.len", doc), path)
 	if !ok {
 		panic("json.len: no value at path " + strconv.Quote(path) + " (guard with json.has)")
 	}

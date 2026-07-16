@@ -234,6 +234,52 @@ func TestLLMAskEndToEnd(t *testing.T) {
 	}
 }
 
+// TestReviewRegressions pins fixes for defects found in the v2 code review.
+func TestReviewRegressions(t *testing.T) {
+	t.Run("exit terminates a value-returning function", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code, err := Run(filepath.Join("testdata", "exitfn.md"), Options{Stdout: &stdout, Stderr: &stderr})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if code != 3 {
+			t.Errorf("exit code = %d, want 3 (stderr: %s)", code, stderr.String())
+		}
+		if stdout.String() != "7\n" {
+			t.Errorf("stdout = %q, want \"7\\n\"", stdout.String())
+		}
+		if !strings.Contains(stderr.String(), "boom") {
+			t.Errorf("stderr missing eprint output: %q", stderr.String())
+		}
+	})
+
+	t.Run("json numbers keep their literal form", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code, err := Run(filepath.Join("testdata", "jsonnums.md"), Options{Stdout: &stdout, Stderr: &stderr})
+		if err != nil || code != 0 {
+			t.Fatalf("Run: %v, code %d, stderr:\n%s", err, code, stderr.String())
+		}
+		want := "1000001\n1721000000\n9007199254740993\n3.5\n"
+		if stdout.String() != want {
+			t.Errorf("stdout = %q, want %q", stdout.String(), want)
+		}
+	})
+
+	t.Run("underscore is an ordinary identifier", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code, err := Run(filepath.Join("testdata", "underscore.md"), Options{Stdout: &stdout, Stderr: &stderr})
+		if err != nil || code != 0 {
+			t.Fatalf("Run: %v, code %d, stderr:\n%s", err, code, stderr.String())
+		}
+		if stdout.String() != "5\n" {
+			t.Errorf("stdout = %q, want \"5\\n\"", stdout.String())
+		}
+	})
+}
+
 func TestLLMAskRefusal(t *testing.T) {
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"stop_reason": "refusal", "content": [], "stop_details": {"explanation": "out of scope"}}`)

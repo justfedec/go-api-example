@@ -278,8 +278,41 @@ func (g *gen) funcDecl(fn *ast.FuncDecl) {
 	for _, s := range fn.Body.Stmts {
 		g.stmt(s)
 	}
+	// The checker accepts exit() as a terminating statement, but Go's own
+	// termination analysis does not know _ink_exit never returns — close the
+	// gap with an unreachable trailer.
+	if fn.Ret != nil && !goBlockTerminates(fn.Body) {
+		g.line(`panic("unreachable")`)
+	}
 	g.indent--
 	g.line("}")
+}
+
+// goBlockTerminates mirrors Go's terminating-statement analysis over the
+// statements Inkdown emits (return, and if/else chains that all terminate).
+func goBlockTerminates(b *ast.Block) bool {
+	if len(b.Stmts) == 0 {
+		return false
+	}
+	return goStmtTerminates(b.Stmts[len(b.Stmts)-1])
+}
+
+func goStmtTerminates(s ast.Stmt) bool {
+	switch s := s.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.IfStmt:
+		if s.Else == nil || !goBlockTerminates(s.Then) {
+			return false
+		}
+		switch e := s.Else.(type) {
+		case *ast.Block:
+			return goBlockTerminates(e)
+		case *ast.IfStmt:
+			return goStmtTerminates(e)
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------- statements
@@ -597,6 +630,8 @@ var goReserved = map[string]bool{
 	"fmt": true, "strconv": true, "main": true, "init": true,
 	"strings": true, "os": true, "net": true, "http": true, "json": true,
 	"bufio": true, "time": true, "io": true, "bytes": true, "utf8": true,
+	// the blank identifier is not assignable-from in Go expression position
+	"_": true,
 }
 
 // sanitize maps an Inkdown identifier to a safe Go identifier. Appending

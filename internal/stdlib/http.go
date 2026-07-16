@@ -59,13 +59,23 @@ func init() {
 	done     chan struct{}
 }
 
-func (q *_ink_request) String() string { return "<request>" }
+func (q *_ink_request) String() string {
+	if q == nil {
+		return "<nil>"
+	}
+	return "<request>"
+}
 
 type _ink_server struct {
 	reqs chan *_ink_request
 }
 
-func (s *_ink_server) String() string { return "<server>" }
+func (s *_ink_server) String() string {
+	if s == nil {
+		return "<nil>"
+	}
+	return "<server>"
+}
 
 // _ink_serve listens synchronously — a taken port panics here, in the frame
 // mapped to the http.serve call — then accepts in the background. Handler
@@ -133,6 +143,9 @@ func _ink_respond(q *_ink_request, status int, body string) {
 	if q.answered {
 		panic("http.respond: the request was already answered")
 	}
+	if status < 100 || status > 599 {
+		panic("http.respond: invalid status code " + strconv.Itoa(status))
+	}
 	q.answered = true
 	q.w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	q.w.WriteHeader(status)
@@ -153,7 +166,12 @@ func _ink_respond(q *_ink_request, status int, body string) {
 	ok       bool
 }
 
-func (r *_ink_response) String() string { return "<response>" }
+func (r *_ink_response) String() string {
+	if r == nil {
+		return "<nil>"
+	}
+	return "<response>"
+}
 
 var _ink_httpClient = &http.Client{Timeout: 10 * time.Minute}
 
@@ -169,9 +187,11 @@ func _ink_httpRequest(method, url string, headers []string, body string) *_ink_r
 		return &_ink_response{respBody: err.Error()}
 	}
 	for _, h := range headers {
-		if i := strings.Index(h, ":"); i >= 0 {
-			req.Header.Set(strings.TrimSpace(h[:i]), strings.TrimSpace(h[i+1:]))
+		i := strings.Index(h, ":")
+		if i <= 0 {
+			panic("http.request: header entries must look like \"Name: value\", got " + strconv.Quote(h))
 		}
+		req.Header.Set(strings.TrimSpace(h[:i]), strings.TrimSpace(h[i+1:]))
 	}
 	resp, err := _ink_httpClient.Do(req)
 	if err != nil {
