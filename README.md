@@ -71,42 +71,52 @@ inkdown run examples/todo-api.md
 ## The language in 30 seconds
 
 Statically typed with inference, four basic types (`int`, `float`, `string`,
-`bool`) plus lists (`[T]`) and opaque handles (`server`, `request`,
-`response`), immutable-by-default bindings, and no implicit conversions. The
-full definition lives in [SPEC.md](SPEC.md).
+`bool`), lists (`[T]`), **records** (named-field types), opaque handles
+(`server`, `request`, `response`), immutable-by-default bindings, and no
+implicit conversions. The full definition lives in [SPEC.md](SPEC.md).
 
 ```
+record Point { x: int, y: int }
+
 func fib(n: int) -> int {
   if n < 2 { return n }
   return fib(n - 1) + fib(n - 2)
 }
 
-let label = "fib"        # immutable, type inferred
-var results: [int] = []  # mutable, annotated
-
+var points: [Point] = []          # a list of records, not parallel arrays
 for i in range(0, 10) {
-  push(results, fib(i))
+  push(points, Point(x: i, y: fib(i)))
 }
-print(label, results, len(results))
+print(points[9].y)                # 34
+
+let n, err = int("not a number")  # recover instead of panicking
+if err != "" { print(err) }
 ```
 
+- **Records** — `record Todo { id: int, title: string }`, constructed with
+  named fields (`Todo(id: 1, title: "x")`), read and mutated with a dot
+  (`t.title`, `t.done = true`). They replace the parallel-list pattern.
+- **Recoverable errors** — `let value, err = f(...)` binds a fallible
+  builtin's failure to a string instead of panicking (`int`/`float` on a
+  string, `json.get`, `json.len`, `llm.ask`).
 - **Literate rule** — all ```` ```inkdown ```` blocks in the document are
   concatenated top to bottom into one program; blocks tagged
   ```` ```inkdown example ```` are documentation only and never compile.
-- **Keywords** — `func return let var if else while for in break continue and
-  or not true false`.
+- **Keywords** — `func record return let var if else while for in break
+  continue and or not true false`.
 - **Top-level code is `main`** — statements run top to bottom; top-level
-  declarations are globals visible inside functions; functions are hoisted, so
-  the document can be ordered for the reader, not for the compiler.
+  declarations are globals visible inside functions; functions and records are
+  hoisted, so the document can be ordered for the reader, not the compiler.
 
 ## The standard library
 
 One grammar extension powers all of it: builtins can live in namespaces and
 are called as `http.get(...)`. Everything else is predeclared names.
 
-**Strings** — `split`, `join`, `contains`, `starts_with`, `index_of`,
-`substring`, `trim`, `lower`, `upper`, `replace`. Positions count runes, so
-they compose on UTF-8 text.
+**Strings** (`str.`) — `str.split`, `str.join`, `str.contains`,
+`str.starts_with`, `str.index_of`, `str.slice`, `str.trim`, `str.lower`,
+`str.upper`, `str.replace`, and `str.len`. Every position counts runes, so
+`str.slice(s, 0, str.len(s))` is always valid on UTF-8 text.
 
 **Process** — `env`, `eprint`, `exit`, `read_line`, and the guards `is_int` /
 `is_float` so untrusted input never panics.
@@ -135,10 +145,26 @@ Messages API with `ANTHROPIC_API_KEY` from the environment (model defaults to
 `claude-opus-4-8`; override with `INKDOWN_LLM_MODEL`). The implementation is
 `net/http` from the Go stdlib — zero dependencies, hermetic builds.
 
-The error-handling philosophy is **guards + accessors**: test with `is_int` /
-`json.has` / `http.ok` where failure is expected; panics (which map to your
-`.md` line) are reserved for programmer errors. See
+The error-handling philosophy is **guards, error bindings, and accessors**:
+test with `is_int` / `json.has` / `http.ok`, or bind the failure with
+`let x, err = json.get(...)`, where failure is expected; panics (which map to
+your `.md` line) are reserved for programmer errors. See
 [SPEC.md §7](SPEC.md#7-builtins).
+
+## Fast
+
+`inkdown run` caches the compiled binary, so re-running an unchanged program
+skips the `go build`. Measured on an http+json program:
+
+| | latency |
+| --- | --- |
+| first run (compiles) | ~900 ms |
+| cached run | ~70 ms |
+| `fib(30)`, native binary | native Go speed (~a few hundred ms) |
+
+The cache key is the *generated Go* plus the toolchain version, so any change
+to your program, the compiler, or `go` invalidates it automatically;
+`--no-cache` forces a recompile.
 
 ## Diagnostics that point at your document
 
@@ -191,7 +217,8 @@ and only that chunk (plus its imports) appears.
 - [examples/fibonacci.md](examples/fibonacci.md) — functions, recursion, hoisting
 - [examples/fizzbuzz.md](examples/fizzbuzz.md) — `%`, `if / else if / else`
 - [examples/lists.md](examples/lists.md) — lists, `push`, `while`, conversions, globals
-- [examples/strings.md](examples/strings.md) — the string builtins and guards
+- [examples/records.md](examples/records.md) — records: fields, nesting, mutation, references
+- [examples/strings.md](examples/strings.md) — the `str.` builtins, guards, and error binding
 - [examples/json.md](examples/json.md) — dot-path JSON reading and safe building
 - [examples/hello-web.md](examples/hello-web.md) — the smallest web server
 - [examples/todo-api.md](examples/todo-api.md) — **a full todo REST API in Markdown** (this repo's original Go API, reborn)
@@ -217,8 +244,9 @@ key.
 
 ## Status and roadmap
 
-This is v2: v1's deliberately small core plus namespaced builtins, handle
-types, and the web/LLM stdlib. Still out by design (see
-[SPEC.md §11](SPEC.md#11-limitations-and-future-directions)): maps and
-structs, first-class functions, imports/multi-file programs, concurrency,
-and `let x, err = ...` error binding.
+This is v3: v2's namespaced builtins, handle types, and web/LLM stdlib, plus
+**records**, **recoverable `let x, err = ...` bindings**, the `str.` string
+namespace, a hardened server, and a binary cache. Still out by design (see
+[SPEC.md §11](SPEC.md#11-limitations-and-future-directions)): maps, record
+methods, first-class functions, generics, imports/multi-file programs, and
+concurrency.
