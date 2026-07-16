@@ -74,6 +74,16 @@ func TestParseValid(t *testing.T) {
 			"let a = 1; let b = 2",
 			`(program (let a 1) (let b 2))`,
 		},
+		{
+			"namespaced calls",
+			"let r = http.get(\"u\")\nhttp.respond(r, 200, json.escape(s))",
+			`(program (let r (call http.get "u")) (expr (call http.respond r 200 (call json.escape s))))`,
+		},
+		{
+			"namespaced call composes with indexing and args",
+			"let t = json.get(http.text(rs[0]), \"a.b\")",
+			`(program (let t (call json.get (call http.text (index rs 0)) "a.b")))`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,6 +116,10 @@ func TestParseErrors(t *testing.T) {
 		{"expression as garbage", "let a = 1 + \n", "expected an expression, found newline", 1, 13},
 		{"two statements one line", "f() g()\n", "expected newline after statement, found 'g'", 1, 5},
 		{"else without if", "else {\n}\n", "expected an expression, found 'else'", 1, 1},
+		{"leading dot number", "let a = .5\n", "expected an expression, found '.'", 1, 9},
+		{"dotted name without call", "let x = a.b\n", "expected '(' after 'a.b'", 1, 12},
+		{"dot on non identifier", "f().x(1)\n", "'.' is only valid in namespaced calls", 1, 4},
+		{"chained dots", "a.b.c(1)\n", "expected '(' after 'a.b'", 1, 4},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

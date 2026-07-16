@@ -44,6 +44,7 @@ const (
 	COMMA    // ,
 	COLON    // :
 	ARROW    // ->
+	DOT      // . (namespaced builtin calls: http.get)
 
 	// Operators.
 	ASSIGN         // =
@@ -80,6 +81,7 @@ var kindNames = map[Kind]string{
 
 	LPAREN: "'('", RPAREN: "')'", LBRACE: "'{'", RBRACE: "'}'",
 	LBRACKET: "'['", RBRACKET: "']'", COMMA: "','", COLON: "':'", ARROW: "'->'",
+	DOT: "'.'",
 
 	ASSIGN: "'='", PLUS: "'+'", MINUS: "'-'", STAR: "'*'", SLASH: "'/'",
 	PERCENT: "'%'", PLUS_ASSIGN: "'+='", MINUS_ASSIGN: "'-='",

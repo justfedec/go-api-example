@@ -152,6 +152,10 @@ func (l *lexer) next() (token.Token, error) {
 		return one(token.COMMA)
 	case ':':
 		return one(token.COLON)
+	case '.':
+		// Only reachable outside number literals: digits consume their own
+		// '.', and a trailing '.' after digits is a malformed number.
+		return one(token.DOT)
 	case '+':
 		if nxt == '=' {
 			return two(token.PLUS_ASSIGN, "+=")

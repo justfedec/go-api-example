@@ -391,6 +391,20 @@ func (p *parser) parsePostfix() ast.Expr {
 			idx := p.parseExpr()
 			p.expect(token.RBRACKET)
 			x = &ast.IndexExpr{ExprBase: ast.At(x.Pos()), X: x, Index: idx}
+		case token.DOT:
+			// Namespaced builtin call: fold IDENT '.' IDENT '(' into a single
+			// Ident named "http.get"; the LPAREN case of the next iteration
+			// builds the call. Dots exist only in call position.
+			base, ok := x.(*ast.Ident)
+			if !ok {
+				p.fail("'.' is only valid in namespaced calls like http.get(...)")
+			}
+			p.advance()
+			member := p.expect(token.IDENT)
+			if !p.at(token.LPAREN) {
+				p.fail("expected '(' after '%s.%s' (namespaced names can only be called)", base.Name, member.Lit)
+			}
+			x = &ast.Ident{ExprBase: ast.At(base.Pos()), Name: base.Name + "." + member.Lit}
 		default:
 			return x
 		}
