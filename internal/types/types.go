@@ -51,6 +51,21 @@ func (l *List) Equal(other Type) bool {
 	return ok && l.Elem.Equal(o.Elem)
 }
 
+// Opaque is a nominal handle type (server, request, response). Values exist
+// only through builtins: the type has no literal syntax and no operators.
+// Because IsNumeric/IsOrdered/IsComparable accept only *Basic, arithmetic,
+// ordering, equality, indexing, and iteration are all rejected automatically.
+type Opaque struct {
+	Name string
+}
+
+func (o *Opaque) String() string { return o.Name }
+
+func (o *Opaque) Equal(other Type) bool {
+	t, ok := other.(*Opaque)
+	return ok && t.Name == o.Name
+}
+
 // IsNumeric reports whether t is int or float.
 func IsNumeric(t Type) bool {
 	b, ok := t.(*Basic)

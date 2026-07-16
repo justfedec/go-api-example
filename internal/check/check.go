@@ -5,8 +5,10 @@ package check
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/justfedec/inkdown/internal/ast"
+	"github.com/justfedec/inkdown/internal/stdlib"
 	"github.com/justfedec/inkdown/internal/token"
 	"github.com/justfedec/inkdown/internal/types"
 )
@@ -106,6 +108,21 @@ var builtinNames = map[string]bool{
 	"str": true, "int": true, "float": true, "string": true, "bool": true,
 }
 
+// The stdlib registry extends the reserved set: table builtins (dotted names
+// can never collide with user identifiers, but membership drives the
+// unused-result rule), namespace roots, and handle type names.
+func init() {
+	for name := range stdlib.Specs {
+		builtinNames[name] = true
+	}
+	for name := range stdlib.Roots {
+		builtinNames[name] = true
+	}
+	for name := range stdlib.Types {
+		builtinNames[name] = true
+	}
+}
+
 func (c *checker) declare(sc *scope, pos token.Pos, sym *symbol) {
 	if builtinNames[sym.name] {
 		c.errf(pos, "cannot redeclare builtin '%s'", sym.name)
@@ -192,6 +209,9 @@ func (c *checker) resolveType(t ast.TypeExpr) types.Type {
 			return types.Bool
 		case "str":
 			c.errf(t.Pos(), "unknown type 'str' (the type is called 'string')")
+		}
+		if opaque, ok := stdlib.Types[t.Name]; ok {
+			return opaque
 		}
 		c.errf(t.Pos(), "unknown type '%s'", t.Name)
 	case *ast.ListType:
@@ -508,6 +528,12 @@ func (c *checker) exprInner(sc *scope, e ast.Expr, expected types.Type) types.Ty
 	case *ast.Ident:
 		sym := sc.lookup(e.Name)
 		if sym == nil {
+			if stdlib.Roots[e.Name] {
+				c.errf(e.Pos(), "'%s' is a namespace; its functions are called like %s.name(...)", e.Name, e.Name)
+			}
+			if stdlib.Types[e.Name] != nil {
+				c.errf(e.Pos(), "'%s' is a type, not a value", e.Name)
+			}
 			if builtinNames[e.Name] {
 				c.errf(e.Pos(), "builtin '%s' can only be called", e.Name)
 			}
@@ -647,6 +673,39 @@ func (c *checker) call(sc *scope, e *ast.CallExpr, _ types.Type) types.Type {
 			suggestion = " (use str(x) to convert to string)"
 		}
 		c.errf(e.Pos(), "'%s' is a type, not a function%s", name, suggestion)
+	}
+
+	// Table builtins: monomorphic signatures validated generically. Parameter
+	// types flow into the arguments as the expected type, so empty list
+	// literals type-check exactly as they do for user functions.
+	if spec, ok := stdlib.Specs[name]; ok {
+		if len(e.Args) < spec.Min() || len(e.Args) > len(spec.Params) {
+			if spec.Min() == len(spec.Params) {
+				argCount(len(spec.Params))
+			}
+			c.errf(e.Pos(), "%s() takes %d to %d arguments, got %d", name, spec.Min(), len(spec.Params), len(e.Args))
+		}
+		for i, a := range e.Args {
+			want := spec.Params[i]
+			got := c.exprValue(sc, a, want)
+			if !got.Equal(want) {
+				c.errf(a.Pos(), "argument %d of %s() must be %s, got %s", i+1, name, want, got)
+			}
+		}
+		return spec.Ret
+	}
+	if stdlib.Types[name] != nil {
+		c.errf(e.Pos(), "'%s' is a type, not a function", name)
+	}
+	if stdlib.Roots[name] {
+		c.errf(e.Pos(), "'%s' is a namespace, not a function; call one of its functions like %s.name(...)", name, name)
+	}
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		root, member := name[:i], name[i+1:]
+		if stdlib.Roots[root] {
+			c.errf(e.Pos(), "'%s' has no function '%s'", root, member)
+		}
+		c.errf(e.Pos(), "'%s' is not a namespace (dot-calls exist only for the builtin namespaces)", root)
 	}
 
 	sym := sc.lookup(name)
