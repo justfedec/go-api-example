@@ -4,6 +4,10 @@ A terminal chat REPL in a dozen lines of Markdown. It needs the
 `ANTHROPIC_API_KEY` environment variable; the model defaults to
 `claude-opus-4-8` and can be overridden with `INKDOWN_LLM_MODEL`.
 
+The `let reply, err = llm.ask(...)` form keeps a failed call — a network
+blip, a rate limit — from crashing the whole session: we print the error and
+carry on.
+
 ```inkdown
 print("Chat with Claude — press Enter on an empty line to quit")
 while true {
@@ -11,9 +15,14 @@ while true {
   print("you:")
   let q = read_line()
   if q == "" { break }
+  let reply, err = llm.ask(q, "Keep answers short: three sentences at most.")
   print("")
-  print("claude:")
-  print(llm.ask(q, "Keep answers short: three sentences at most."))
+  if err != "" {
+    print("(error:", err + ")")
+  } else {
+    print("claude:")
+    print(reply)
+  }
 }
 ```
 
