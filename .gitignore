@@ -1,0 +1,7 @@
+# Compiled CLI and inkdown-built program binaries (anchored: cmd/inkdown/ must stay visible)
+/inkdown
+/program
+
+# Editor droppings
+.DS_Store
+*.swp

@@ -3,9 +3,9 @@
 package parser
 
 import (
-	"github.com/justfedec/go-api-example/inkdown/internal/ast"
-	"github.com/justfedec/go-api-example/inkdown/internal/lexer"
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/ast"
+	"github.com/justfedec/inkdown/internal/lexer"
+	"github.com/justfedec/inkdown/internal/token"
 )
 
 // Parse lexes and parses src into a Program.

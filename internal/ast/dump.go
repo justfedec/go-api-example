@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/token"
 )
 
 // Dump renders a node as a compact s-expression. It exists for parser tests

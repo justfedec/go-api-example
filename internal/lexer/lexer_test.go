@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/token"
 )
 
 func kinds(toks []token.Token) []token.Kind {

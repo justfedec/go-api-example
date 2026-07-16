@@ -1,3 +1,3 @@
-module github.com/justfedec/go-api-example/inkdown
+module github.com/justfedec/inkdown
 
 go 1.22

@@ -6,9 +6,9 @@ package check
 import (
 	"fmt"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/ast"
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
-	"github.com/justfedec/go-api-example/inkdown/internal/types"
+	"github.com/justfedec/inkdown/internal/ast"
+	"github.com/justfedec/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/types"
 )
 
 // Check analyzes prog in three passes: collect function signatures, check

@@ -13,11 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/check"
-	"github.com/justfedec/go-api-example/inkdown/internal/codegen"
-	"github.com/justfedec/go-api-example/inkdown/internal/literate"
-	"github.com/justfedec/go-api-example/inkdown/internal/parser"
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/check"
+	"github.com/justfedec/inkdown/internal/codegen"
+	"github.com/justfedec/inkdown/internal/literate"
+	"github.com/justfedec/inkdown/internal/parser"
+	"github.com/justfedec/inkdown/internal/token"
 )
 
 // Options configures Build and Run.

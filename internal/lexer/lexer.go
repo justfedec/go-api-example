@@ -9,7 +9,7 @@ package lexer
 import (
 	"strings"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/token"
 )
 
 // Lex scans src and returns the full token stream, ending with an EOF token.

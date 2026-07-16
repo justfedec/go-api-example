@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/driver"
+	"github.com/justfedec/inkdown/internal/driver"
 )
 
 const usage = `inkdown — a Markdown programming language compiled with Go

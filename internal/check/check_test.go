@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/ast"
-	"github.com/justfedec/go-api-example/inkdown/internal/parser"
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/ast"
+	"github.com/justfedec/inkdown/internal/parser"
+	"github.com/justfedec/inkdown/internal/token"
 )
 
 func mustParse(t *testing.T, src string) *ast.Program {

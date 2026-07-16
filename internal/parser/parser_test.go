@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/ast"
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/ast"
+	"github.com/justfedec/inkdown/internal/token"
 )
 
 func TestParseValid(t *testing.T) {

@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/justfedec/go-api-example/inkdown/internal/ast"
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
-	"github.com/justfedec/go-api-example/inkdown/internal/types"
+	"github.com/justfedec/inkdown/internal/ast"
+	"github.com/justfedec/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/types"
 )
 
 // Generate emits the Go source for a checked program. srcName is the

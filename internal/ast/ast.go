@@ -6,8 +6,8 @@
 package ast
 
 import (
-	"github.com/justfedec/go-api-example/inkdown/internal/token"
-	"github.com/justfedec/go-api-example/inkdown/internal/types"
+	"github.com/justfedec/inkdown/internal/token"
+	"github.com/justfedec/inkdown/internal/types"
 )
 
 // Node is implemented by every AST node.
